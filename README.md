@@ -1,101 +1,142 @@
-# WP Sync – pull client changes from live into local
+# WP Sync
 
-Pulls new and edited **posts, pages, custom post types, media, categories/tags and their meta** from a live WordPress site into your local copy, **without wiping your local work**. If something changed on live *and* locally, it's left alone and shown as a conflict for you to decide.
+**Pull your client's content changes from a live WordPress site into your local copy — without overwriting your own work.**
 
-Use it from **Tools → WP Sync** in WordPress, or from the terminal with `wp sync`. Both use the same engine.
+You're building or fixing something on a local or staging copy. Meanwhile the client keeps adding posts, pages, products and images on the live site. Normally you either work on stale content or copy the whole database down again and lose your changes. WP Sync gives you a third option: bring across just what changed on live, and leave anything you've changed locally alone.
 
-Nothing is ever written to the live site. Live only answers read-only, key-protected requests.
+- **Pull changes** – new and edited posts, pages, custom post types, media, categories/tags, custom fields, menus and key site settings.
+- **Never overwrites your work** – if something changed on live *and* locally, it's left alone and flagged as a conflict for you to decide.
+- **Copy everything from live** – a full database + uploads copy when you want to start fresh, with URLs rewritten safely.
+- **Undo** – a backup is taken before every pull and copy; restore from the dashboard.
+- **Works from WordPress or the terminal** – *Tools → WP Sync*, or `wp sync` (WP-CLI).
+- **Read-only on live** – nothing is ever written to the live site.
 
-## Install (both sites)
+> **Status: beta.** WP Sync is used in real projects and is well tested, but it's young. Keep backups (it makes its own before every change, too) and try it on a copy first. See [Limitations](#limitations).
 
-**As a normal plugin (easiest):** on **live** and **local**, go to **Plugins → Add New → Upload Plugin**, upload `wp-sync.zip`, and click **Activate**. To update later, upload the new zip and choose **Replace current with uploaded**.
+![The WP Sync screen on a local site](docs/screenshot-local.png)
 
-**Updates:** when a new version is released on [GitHub](https://github.com/alexmciver/WP-Sync-Tool/releases), Tools → WP Sync shows **"WP Sync x.y.z is available"** with an **Update now** button (it also appears on the Plugins page and Dashboard → Updates). Use **Check for updates** at the top of the WP Sync screen to look straight away. Update both sites so they stay on the same version. Prefer hands-off? Click **Enable auto-updates** next to WP Sync on the Plugins screen, or add `define( 'WPSYNC_AUTO_UPDATE', true );` to wp-config.php.
+---
 
-**Or as a must-use plugin** (can't be deactivated by accident, but can't update itself either): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
+## Requirements
 
-Keep it active on live at all times: changes made on live while it's deactivated aren't recorded (use catch-up mode to recover).
+- WordPress 5.8 or newer, PHP 7.4 or newer
+- Installed on **both** sites: the live site (the one you pull *from*) and your local/staging copy (the one you pull *into*)
+- The live site must be reachable from your local site over the internet (HTTPS recommended)
+- Optional: [WP-CLI](https://wp-cli.org/) for the terminal commands
 
-## Connect (in WordPress)
+## Install
 
-1. **Live site:** go to **Tools → WP Sync**, click **Generate key**, then **Copy** the **Connection code**.
-2. **Local site:** go to **Tools → WP Sync**, paste it into **Connection code**, then click **Save and connect**.
+1. Download **`wp-sync.zip`** from the [latest release](https://github.com/alexmciver/WP-Sync-Tool/releases/latest). (Use this file, not GitHub's "Source code" zip.)
+2. On **both** sites: *Plugins → Add New → Upload Plugin*, choose the zip, **Activate**.
 
-(Terminal: `wp sync key` on live prints a ready-made `wp sync connect wpsync1:…` command for local.)
+Updates appear like any other plugin update (*Tools → WP Sync → Check for updates*, the Plugins screen, or *Dashboard → Updates*). Update both sites so they stay on the same version.
 
-That's it. The local screen now shows how many changes are waiting on live.
+## Set up (2 minutes)
 
-> Prefer wp-config? Put `define( 'WPSYNC_SECRET', '…' );` on both sites and `define( 'WPSYNC_REMOTE', 'https://live-site' );` on local. Constants override the screen.
+1. **On the live site:** *Tools → WP Sync* → **Generate key**, then **Copy** the **Connection code**.
+2. **On your local site:** *Tools → WP Sync* → paste it into **Connection code** → **Save and connect**.
 
-## Use it
+The screen now shows how many changes are waiting on live.
 
-**In WordPress (local site → Tools → WP Sync):**
-- **Preview changes** shows what would be created, updated or deleted, plus conflicts. It changes nothing.
-- **Pull changes** backs up the local database, then pulls in batches with a progress bar. Large sites are fine, and if it's interrupted, just press it again to carry on.
-- **Conflicts** lists items changed on both sides. Choose **Use live version** or **Keep mine**.
-- **Your local changes** lists everything you've edited locally since it was last pulled.
-- **More options** has catch-up from a date, let live win all conflicts, and re-download media.
+**Starting point matters.** WP Sync records changes on live from the moment it's installed there. The easiest setup is:
+- Install on live first, then make your local copy (Local, WP Migrate, All-in-One, …) – or use **Copy everything from live** (below). WP Sync detects that the database is a fresh copy and pulls only what changes after that.
+- Already had a local copy before installing? Do your first pull with **More options → Pull all content from live** (or catch up from the date you made the copy).
 
-**In the terminal (local site folder; in Local, right-click the site → Open site shell):**
+## Everyday use
 
-| Command | What it does |
+On your local site, *Tools → WP Sync*:
+
+| | |
 |---|---|
-| `wp sync status` | Checks the connection and shows what's waiting |
-| `wp sync pull --dry-run` | Preview; changes nothing |
-| `wp sync pull` | Pull (backs up first) |
-| `wp sync conflicts` | List conflicts |
-| `wp sync take 123` / `wp sync keep 123` | Resolve a conflict (add `--term` for categories/tags) |
-| `wp sync local-changes` | What you've changed locally |
-| `wp sync key` | (on live) show or generate this site's key |
-| `wp sync connect <url> <key>` | (on local) connect without the admin screen |
+| **Preview changes** | Shows what would be created, updated or deleted, and any conflicts. Changes nothing. |
+| **Pull changes** | Backs up this site, then pulls. Progress is shown; large pulls run in batches and can be cancelled and resumed. |
+| **Conflicts** | Items changed on both sides since the last pull. Choose **Use live version** or **Keep mine**. |
+| **Your local changes** | Everything you've edited locally since it was last pulled. |
+| **Undo a pull or copy** | Restore the backup taken before any pull or copy. |
+
+## What gets pulled
+
+| Every pull | Only with *Copy everything from live* | Never |
+|---|---|---|
+| Posts, pages, custom post types (incl. WooCommerce products) | Theme, Customizer and page-builder theme options | WooCommerce orders |
+| Media library + files (all sizes) | Divi Theme Builder & Library, Elementor templates | Logged-in sessions |
+| Categories, tags, custom taxonomies | Widgets, forms and other plugin settings | Theme and plugin files (keep those in Git) |
+| Custom fields (ACF etc.) and page-builder content | Users | |
+| Menus and menu locations | | |
+| Site title, tagline, homepage, posts page, sticky posts, site icon, logo | | |
+
+IDs that point at other content are re-pointed to the matching local items – featured images, galleries, ACF image/relationship/taxonomy fields, Gutenberg blocks, `[gallery]`, Divi galleries, WooCommerce galleries/upsells, Elementor data, menu items, homepage setting. Live URLs are rewritten to your local URL.
+
+If a live item isn't linked to anything locally yet, WP Sync looks for the same thing (same post type + slug, same media file, same category slug) and links them instead of creating a duplicate.
 
 ## Copy everything from live
 
-**Tools → WP Sync → Copy everything from live** (or `wp sync clone`) replaces this site's whole database with a copy of live – content, menus, settings, Divi Theme Builder/Library, widgets, users, plugin data – and downloads any missing or changed files from live's uploads folder.
+*Tools → WP Sync → Copy everything from live* replaces the local database with a copy of live and downloads missing or changed files from live's uploads folder.
 
-- Your current database is fully backed up first (restore under **Undo a pull or copy**).
-- Everything is loaded into temporary tables and switched in at the very end, so **Cancel** at any point leaves this site untouched.
-- Live URLs and server paths are rewritten, including inside serialized and JSON data; a different table prefix is handled.
-- Kept from this site: its URL, its WP Sync connection, and "Discourage search engines".
-- If live runs a different WordPress version, the database is brought in line automatically (and you're warned if live is newer).
-- Afterwards log in with your **live** username and password. Normal pulls then continue from that point.
-- Theme and plugin code isn't copied – keep that in Git.
-- On live, **Allow Copy everything from this site** (Tools → WP Sync) can switch this off; it's on by default.
+- Off by default on live, because it shares the whole database: on live, *Tools → WP Sync → Let other sites pull from this one* → **Allow for 1 hour** (or **Always allow**).
+- Your local database is fully backed up first; everything loads into temporary tables and is switched in at the very end, so **Cancel** leaves your site untouched.
+- URLs and server paths are rewritten, including inside serialized and JSON data; a different table prefix is handled; a different WordPress version is reconciled automatically.
+- Kept from your local site: its URL, its WP Sync connection, and "Discourage search engines".
+- Afterwards, log in with your **live** username and password.
 
-## When to copy, and catch-up mode
+## Terminal (WP-CLI)
 
-WP Sync records changes on live from the moment it's installed there.
-
-- **Best:** install on live first, *then* copy live down to local as you normally would (Local, WP Migrate, All-in-One…). WP Sync notices the database is a fresh copy and starts from that exact point automatically.
-- **Local copy made before installing?** Do your first pull with **More options → Catch-up from date** (or `wp sync pull --since=YYYY-MM-DD`) set to the day you made the copy. After that, a normal pull is all you need.
-
-## What is and isn't pulled
-
-**Matching existing content:** if a live item isn't linked to anything here yet, WP Sync looks for the same thing on this site (same post type + slug, same media file, same category slug) and links them instead of creating a duplicate. If you've edited that local item since, it's reported as a conflict instead of being overwritten.
-
-**Pulled (client-owned content):** posts, pages, custom post types, media + files (all sizes), Woo products and variations, categories/tags/custom taxonomies, all post and term meta, ACF field values, **menus** (items, order, nesting, links re-pointed to local pages/categories) and **menu locations**, plus the settings clients change themselves: site title, tagline, homepage/posts page, sticky posts, site icon and logo. Turn menus off with `define( 'WPSYNC_PULL_MENUS', false );`; add more settings with `define( 'WPSYNC_PULL_OPTIONS', 'option_a,option_b' );`. Image and post IDs are re-pointed to the matching local items in featured images, galleries, ACF image/relationship/taxonomy fields, Gutenberg blocks, `[gallery]`, Divi galleries, Woo galleries/upsells and Elementor data. Live URLs are rewritten to your local URL.
-
-**Never pulled by a normal pull (developer-owned; use Copy everything from live if you want them):** theme, Customizer and plugin settings, ACF field groups, Divi/Elementor templates and Theme Builder, form definitions, Woo orders, users (authors are matched by username, falling back to the first admin).
-
-**Not yet:** comments/reviews, data in plugin-specific tables (Gravity Forms entries, Woo HPOS orders), WPML, multisite. Pushing local changes *up* to live is a later phase.
-
-**Safety during a pull:** no emails, pingbacks or Woo webhooks are sent from the local site; a database backup is made first (kept in `wp-content/wpsync-backups/`, last 10); only one pull runs at a time.
-
-## Undo a pull or copy
-
-**Tools → WP Sync → Undo a pull or copy** lists the backups taken before each pull or full copy (last 10), each with a **Restore** button. Restoring first backs up the current state, so a restore can be undone too. Terminal: `wp sync backups` and `wp sync restore [<file>]`.
-
-## Restoring a backup by hand
+Run in your local site's folder.
 
 ```
-wp sync backups          # lists them, newest first
-wp sync restore <file>   # or Tools → WP Sync → Undo a pull or copy
+wp sync status                     # connection + what's waiting
+wp sync pull --dry-run             # preview
+wp sync pull                       # pull (backs up first)
+wp sync pull --since=2026-01-01    # catch up on everything changed since a date
+wp sync conflicts                  # list conflicts
+wp sync take <id> [--term]         # use live's version
+wp sync keep <id> [--term]         # keep yours
+wp sync local-changes              # what you've changed locally
+wp sync clone                      # copy everything from live
+wp sync backups                    # list backups
+wp sync restore [<file>]           # undo
+wp sync connect <connection-code>  # connect without the admin screen
+wp sync key                        # (on live) show the connection code
 ```
-(`.sql.gz` files: `gunzip` first, or import in phpMyAdmin.) Backups made from the admin screen contain the content tables a pull touches; terminal backups are full `wp db export` dumps.
 
-## Extending for unusual sites
+## Security
 
-If a theme stores an image/post ID in its own meta key, register it so the ID is re-pointed:
+- The key only allows **reading** from live. It's compared in constant time and must be 32+ characters. Treat the connection code like a password.
+- Use `https://` for the live site; WP Sync warns if the key would travel over plain HTTP to a public host.
+- *Copy everything* is opt-in and can be time-limited; logged-in sessions are never copied.
+- Backups are kept outside the public web folder when the server allows (one folder per site), otherwise in `wp-content/wpsync-backups` with deny rules and unguessable file names.
+- Files from live are only written inside uploads and never as executable or server-config files (`.php`, `.phar`, `.htaccess`, `.user.ini`…). Media is only downloaded from the live site or public addresses – never private, internal or cloud-metadata addresses.
+- Updates are only installed from this GitHub repository over HTTPS.
+- Deleting the plugin removes its settings, log, ID tags and backups.
+
+Found a vulnerability? Please report it privately – see [SECURITY.md](SECURITY.md).
+
+## Configuration
+
+Everything works without configuration. Optional `wp-config.php` constants:
+
+```php
+define( 'WPSYNC_REMOTE', 'https://live.example' );          // instead of the connection screen
+define( 'WPSYNC_SECRET', '…' );                              // same key on both sites, instead of the screen
+define( 'WPSYNC_REMOTE_BASIC_AUTH', 'user:pass' );           // live/staging behind HTTP basic auth
+define( 'WPSYNC_SSL_VERIFY', false );                        // staging with a self-signed certificate
+define( 'WPSYNC_PAGE_SIZE', 20 );                            // smaller batches for huge page-builder pages
+define( 'WPSYNC_PULL_MENUS', false );                        // don't pull menus
+define( 'WPSYNC_PULL_OPTIONS', 'option_a,option_b' );        // pull extra options
+define( 'WPSYNC_EXCLUDE_POST_TYPES', 'my_cpt' );             // never pull these post types
+define( 'WPSYNC_EXCLUDE_TAXONOMIES', 'my_tax' );
+define( 'WPSYNC_DEFAULT_AUTHOR', 'alex' );                   // fallback author on local
+define( 'WPSYNC_BACKUP_DIR', '/absolute/path' );             // where backups go
+define( 'WPSYNC_ALLOW_FULL_COPY', true );                    // (live) allow Copy everything permanently
+define( 'WPSYNC_LOG_DAYS', 180 );                            // (live) days of change history to keep
+define( 'WPSYNC_AUTO_UPDATE', true );                        // install updates automatically
+define( 'WPSYNC_DISABLE_UPDATER', true );                    // never check GitHub for updates
+```
+
+## Extending
+
+If a theme or plugin stores a post/image ID somewhere WP Sync doesn't know about, register it so it's re-pointed:
+
 ```php
 add_filter( 'wpsync_meta_ref_keys', function ( $keys, $meta, $type ) {
 	if ( 'post' === $type && isset( $meta['hero_image_id'] ) ) {
@@ -104,43 +145,32 @@ add_filter( 'wpsync_meta_ref_keys', function ( $keys, $meta, $type ) {
 	return $keys;
 }, 10, 3 );
 ```
-Other filters: `wpsync_walk_content` (custom shortcodes), `wpsync_content_meta_keys` (builder data), `wpsync_excluded_post_types`, `wpsync_excluded_taxonomies`, `wpsync_ignored_meta_keys`, `wpsync_backup_tables`. Action: `wpsync_after_pull`.
 
-## Optional wp-config settings
+Other filters: `wpsync_walk_content` (custom shortcodes), `wpsync_content_meta_keys` (builder data), `wpsync_block_id_attributes`, `wpsync_excluded_post_types`, `wpsync_excluded_taxonomies`, `wpsync_ignored_meta_keys`, `wpsync_pulled_options`, `wpsync_option_refs`, `wpsync_backup_tables`, `wpsync_full_copy_skip_tables`, `wpsync_full_copy_skip_dirs`. Action: `wpsync_after_pull`.
 
-```php
-define( 'WPSYNC_REMOTE_BASIC_AUTH', 'user:pass' );        // staging behind a password
-define( 'WPSYNC_SSL_VERIFY', false );                      // staging with a self-signed certificate
-define( 'WPSYNC_PAGE_SIZE', 20 );                          // smaller batches for huge page-builder pages
-define( 'WPSYNC_EXCLUDE_POST_TYPES', 'my_cpt,another' );   // never pull these
-define( 'WPSYNC_EXCLUDE_TAXONOMIES', 'my_tax' );
-define( 'WPSYNC_DEFAULT_AUTHOR', 'alex' );                 // fallback author on local
-```
+## Limitations
 
-## Releasing a new version (for developers)
+- **One direction.** WP Sync pulls live → local. Pushing local changes up to live isn't supported (yet) – deploy those your usual way.
+- Not supported yet: **multisite**, **WPML** (Polylang content works as normal posts/terms), **comments/reviews**, data in plugin-specific tables during normal pulls (e.g. Gravity Forms entries – use *Copy everything*).
+- Conflicts are per item (a whole post or term), not per field.
+- Must-use-plugin installs work but can't update themselves.
 
-Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/class-config.php` (`VERSION`), then push to `main`. The GitHub Action builds `wp-sync.zip` and publishes release `vX.Y.Z`; every site picks it up on its next update check.
+## FAQ / troubleshooting
 
-## Security
+**"Nothing to pull" but I changed something on live.** On live, *Tools → WP Sync → Let other sites pull from this one → Recent changes recorded on this site*. If your edit isn't listed, it's a kind of change normal pulls don't track (see the table above) – use *Copy everything*. If it is listed, check both sites run the same WP Sync version.
 
-- The key only allows **reading** from live; nothing is ever written to live. It's compared in constant time and must be 32+ characters. Treat the connection code like a password.
-- Use `https://` for the live site: over plain `http://` to a public host the key travels unencrypted (WP Sync warns you).
-- **Copy everything** is **off by default** on live because it shares the whole database. Switch it on from live's WP Sync screen – **Allow for 1 hour** is usually best – or for good. Logged-in sessions are never copied.
-- **Backups** are kept outside the public web folder when the server allows (one folder per site), otherwise in `wp-content/wpsync-backups` with deny rules and unguessable file names. Override with `define( 'WPSYNC_BACKUP_DIR', '/absolute/path' );`.
-- Files from live are only written inside uploads, and never executable/config files (`.php`, `.phar`, `.htaccess`, `.user.ini`…). Media is only downloaded from the live site or public addresses – never private, internal or cloud-metadata addresses.
-- Updates are only installed from GitHub over HTTPS.
-- Deleting the plugin (Plugins → Delete) removes its settings, log, ID tags and backups.
+**"Invalid sync key".** Copy the connection code from live again.
 
-## Troubleshooting
+**"The live site returned a web page instead of data".** A page cache or firewall on live is answering instead of WordPress. Exclude `/wp-json/` and URLs containing `rest_route=` from caching (host cache, cache plugin, Cloudflare rules). Quick check: open `https://your-live-site/wp-json/wpsync/v1/status` – you should see `"Invalid sync key."`, which means WP Sync is running and protected.
 
-- **"Nothing to pull" but you changed something on live**: on live, open Tools → WP Sync → *Let other sites pull from this one* → **Recent changes recorded on this site**. If your edit isn't listed, it's a kind of change WP Sync doesn't track in normal pulls (Divi Theme Builder, theme/Customizer options, widgets, plugin settings) – use **Copy everything from live**. If it is listed, make sure both sites run the same WP Sync version.
+**"Another pull is already running".** If nothing is running (the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks itself after 15 minutes.
 
-- **"Invalid sync key"**: the key on local doesn't match live's. Copy it again from live's Tools → WP Sync.
-- **401/403, "did not return JSON"**: a security plugin or firewall (Wordfence, Cloudflare, "Disable REST API") is blocking `?rest_route=/wpsync/v1/…` on live. Allow that path.
-- **"Is WP Sync installed…on the live site?" (404)**: the files aren't in live's `wp-content/mu-plugins/`, or the `wp-sync/` folder is missing next to `wp-sync.php`.
-- **"Copy everything is switched off on the live site"**: on live, Tools → WP Sync → *Let other sites pull from this one* → **Allow for 1 hour**.
-- **"WP Sync is installed more than once"**: delete the extra copy on the Plugins screen so updates go to the right one.
-- **"Another pull is already running": if nothing is running (e.g. the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks by itself after 15 minutes.
-- **"The live site returned a web page instead of data"**: a page cache or firewall on live is answering instead of WordPress. Exclude `/wp-json/` and URLs containing `rest_route=` from caching (host cache, cache plugin, Cloudflare rules).
-- **Quick check from a browser:** open `https://your-live-site/wp-json/wpsync/v1/status`. You should see `{"code":"wpsync_forbidden","message":"Invalid sync key." …}`, which is correct: it means WP Sync is running and protected. A web page means something is caching it; `rest_no_route` means the plugin isn't active.
-- **Pull seems slow**: the first pull downloads every image size for each new media item. The progress line shows what it's doing; you can Cancel at any time and press Pull again to carry on.
+**Duplicate pages after a pull.** Use *Undo a pull or copy* to restore the backup from before that pull, update to the latest version (it matches existing content), and pull again.
+
+## Contributing
+
+Bug reports and pull requests are welcome – see [CONTRIBUTING.md](CONTRIBUTING.md). Please include your WordPress, PHP and WP Sync versions, and what you expected vs what happened.
+
+## Licence
+
+GPL-2.0-or-later – see [LICENSE](LICENSE). Made by [Alex McIver / Alex M Web Design](https://alexmwebdesign.co.uk). WP Sync is provided as-is, without warranty; always keep backups.

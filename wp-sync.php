@@ -1,11 +1,16 @@
 <?php
 /**
- * Plugin Name: WP Sync (change puller)
- * Description: Pull content your client adds or edits on the live site into your local copy without overwriting your own work. Tools → WP Sync, or `wp sync` in the terminal. Install and activate on BOTH live and local (normal plugin or must-use plugin).
- * Version: 0.5.0
- * Update URI: https://github.com/alexmciver/WP-Sync-Tool
- * Author: Alex M Web Design
- * Requires PHP: 7.4
+ * Plugin Name:       WP Sync (change puller)
+ * Plugin URI:        https://github.com/alexmciver/WP-Sync-Tool
+ * Description:       Pull content your client adds or edits on the live site into your local copy without overwriting your own work. Tools → WP Sync, or `wp sync` in the terminal. Install and activate on BOTH live and local.
+ * Version:           0.5.1
+ * Requires at least: 5.8
+ * Requires PHP:      7.4
+ * Author:            Alex McIver (Alex M Web Design)
+ * Author URI:        https://alexmwebdesign.co.uk
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Update URI:        https://github.com/alexmciver/WP-Sync-Tool
  *
  * Install: upload the zip via Plugins → Add New → Upload and activate it, on both sites.
  * Or, as a must-use plugin: copy this file AND the wp-sync/ folder into wp-content/mu-plugins/.
