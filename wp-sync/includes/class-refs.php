@@ -37,9 +37,21 @@ final class WPSync_Refs {
 				'thumbnail_id' => 'post', // WooCommerce category image.
 			);
 		}
+		if ( 'post' === $object_type ) {
+			$known['_yoast_wpseo_opengraph-image-id'] = 'post';
+			$known['_yoast_wpseo_twitter-image-id']   = 'post';
+			$known['rank_math_primary_category']      = 'term';
+			$known['_rank_math_facebook_image_id']    = 'post';
+		}
 		foreach ( $known as $k => $kind ) {
 			if ( isset( $meta[ $k ] ) ) {
 				$keys[ $k ] = $kind;
+			}
+		}
+		// Yoast's primary term per taxonomy: _yoast_wpseo_primary_category, _primary_product_cat, …
+		foreach ( array_keys( $meta ) as $k ) {
+			if ( 0 === strpos( (string) $k, '_yoast_wpseo_primary_' ) ) {
+				$keys[ $k ] = 'term';
 			}
 		}
 
@@ -105,7 +117,14 @@ final class WPSync_Refs {
 
 	/** Meta keys that hold page-builder content with embedded IDs (rewritten like post_content). */
 	public static function content_meta_keys() {
-		return apply_filters( 'wpsync_content_meta_keys', array( '_elementor_data' ) );
+		return apply_filters( 'wpsync_content_meta_keys', array(
+			'_elementor_data', '_elementor_page_settings',      // Elementor
+			'_fl_builder_data', '_fl_builder_draft',            // Beaver Builder
+			'panels_data',                                       // SiteOrigin Page Builder
+			'_bricks_page_content_2', '_bricks_page_header_2', '_bricks_page_footer_2', // Bricks
+			'ct_builder_json',                                   // Oxygen
+			'_brizy_data',                                       // Brizy (when stored as JSON)
+		) );
 	}
 
 	/* -------------------------------------------------------------- Values */
@@ -162,8 +181,8 @@ final class WPSync_Refs {
 			return $content;
 		}
 
-		if ( '_elementor_data' === $field ) {
-			$content = self::walk_elementor( $content, $cb );
+		if ( in_array( $field, self::content_meta_keys(), true ) ) {
+			$content = self::walk_value( $content, $cb, $field );
 		} else {
 			$content = self::walk_blocks( $content, $cb );
 
@@ -225,12 +244,19 @@ final class WPSync_Refs {
 		return preg_replace_callback(
 			'/<!--\s+wp:([a-z0-9\/-]+)\s+(\{.*?\})\s+(\/)?-->/s',
 			function ( $m ) use ( $cb, $attr_map ) {
-				$name = preg_replace( '#^core/#', '', $m[1] );
-				if ( empty( $attr_map[ $name ] ) ) {
+				$name    = preg_replace( '#^core/#', '', $m[1] );
+				$is_core = false === strpos( $m[1], '/' ) || 0 === strpos( $m[1], 'core/' );
+				$attrs   = json_decode( $m[2], true );
+				if ( ! is_array( $attrs ) ) {
 					return $m[0];
 				}
-				$attrs = json_decode( $m[2], true );
-				if ( ! is_array( $attrs ) ) {
+				if ( ! $is_core ) {
+					// Third-party blocks (Spectra, Kadence, GenerateBlocks, Divi 5, ACF blocks…): generic rules.
+					$changed = false;
+					$attrs   = self::walk_structure( $attrs, $cb, $m[1], $changed );
+					return $changed ? '<!-- wp:' . $m[1] . ' ' . serialize_block_attributes( $attrs ) . ' ' . ( isset( $m[3] ) ? $m[3] : '' ) . '-->' : $m[0];
+				}
+				if ( empty( $attr_map[ $name ] ) ) {
 					return $m[0];
 				}
 				$changed = false;
@@ -255,29 +281,132 @@ final class WPSync_Refs {
 		);
 	}
 
-	/** Elementor stores media as {"url": "...", "id": 123} objects inside a JSON tree. */
-	private static function walk_elementor( $json, callable $cb ) {
-		$data = json_decode( $json, true );
-		if ( ! is_array( $data ) ) {
-			return $json;
-		}
-		$changed = false;
-		$walk    = function ( &$node ) use ( &$walk, $cb, &$changed ) {
-			if ( ! is_array( $node ) ) {
-				return;
-			}
-			if ( isset( $node['url'], $node['id'] ) && is_numeric( $node['id'] ) && (int) $node['id'] > 0 ) {
-				$new = (int) $cb( 'post', (int) $node['id'] );
-				if ( $new !== (int) $node['id'] ) {
-					$node['id'] = is_string( $node['id'] ) ? (string) $new : $new;
-					$changed    = true;
+	/**
+	 * A builder's stored data: JSON text, serialized array/objects (already unserialized), or
+	 * HTML. Returns the same shape with IDs re-pointed.
+	 */
+	public static function walk_value( $value, callable $cb, $field = '' ) {
+		if ( is_string( $value ) ) {
+			$t = ltrim( $value );
+			if ( '' !== $t && ( '[' === $t[0] || '{' === $t[0] ) ) {
+				$data = json_decode( $value, true );
+				if ( is_array( $data ) ) {
+					$changed = false;
+					$data    = self::walk_structure( $data, $cb, $field, $changed );
+					return $changed ? wp_json_encode( $data ) : $value;
 				}
 			}
-			foreach ( $node as &$child ) {
-				$walk( $child );
+			return self::walk_strings( $value, $cb );
+		}
+		if ( is_array( $value ) || $value instanceof stdClass ) {
+			$changed = false;
+			return self::walk_structure( $value, $cb, $field, $changed );
+		}
+		return $value;
+	}
+
+	/** HTML inside builder data: <img class="wp-image-123">, [gallery ids="…"]. */
+	private static function walk_strings( $s, callable $cb ) {
+		if ( false === strpos( $s, 'wp-image-' ) && false === strpos( $s, '[gallery' ) && false === strpos( $s, '<!-- wp:' ) ) {
+			return $s;
+		}
+		return self::walk_content( $s, $cb, 'html' );
+	}
+
+	/** Does this look like a media file URL? */
+	private static function is_media_url( $u ) {
+		return is_string( $u ) && '' !== $u && ( false !== strpos( $u, '/uploads/' ) || preg_match( '/\.(jpe?g|png|gif|webp|avif|svg|bmp|tiff?|ico|heic|mp4|m4v|mov|webm|ogv|mp3|m4a|wav|ogg|pdf|docx?|xlsx?|pptx?|zip)(\?|#|$)/i', $u ) );
+	}
+
+	/**
+	 * Generic rules for media IDs stored by page builders, applied anywhere in a structure:
+	 *  - an "id" next to a media "url"/"src" (Elementor, Spectra, Kadence, Divi 5, Bricks…)
+	 *    or next to "image": {"url"} (GenerateBlocks)
+	 *  - "fooID"/"fooId"/"foo_id" next to "foo"/"fooUrl"/"foo_url" holding a media URL (Kadence, GenerateBlocks)
+	 *  - "foo" next to "foo_src" (Beaver Builder)
+	 *  - ID lists: "ids", "gallery_ids", "galleryIds", "images_ids" (Kadence, Divi 5…)
+	 *  - SiteOrigin widget/row image keys inside panels_data
+	 * Media IDs are always attachments ('post').
+	 */
+	public static function walk_structure( $node, callable $cb, $field, &$changed ) {
+		$is_obj = $node instanceof stdClass;
+		if ( ! $is_obj && ! is_array( $node ) ) {
+			return $node;
+		}
+		$arr = $is_obj ? get_object_vars( $node ) : $node;
+		$map = function ( $v ) use ( $cb, &$changed ) {
+			$new = self::map_value( $v, function ( $id ) use ( $cb ) {
+				return (int) $cb( 'post', (int) $id );
+			} );
+			if ( $new !== $v ) {
+				$changed = true;
 			}
+			return $new;
 		};
-		$walk( $data );
-		return $changed ? wp_json_encode( $data ) : $json;
+		$siteorigin = ( 'panels_data' === $field );
+		foreach ( $arr as $k => $v ) {
+			if ( ! is_string( $k ) ) {
+				continue;
+			}
+			$numeric = ( is_int( $v ) || ( is_string( $v ) && preg_match( '/^\d+$/', $v ) ) ) && (int) $v > 0;
+			$url_of  = function ( $key ) use ( $arr ) {
+				return isset( $arr[ $key ] ) && is_string( $arr[ $key ] ) ? $arr[ $key ] : '';
+			};
+			if ( $numeric ) {
+				$hit = false;
+				if ( 'id' === $k ) {
+					$img = isset( $arr['image'] ) ? ( is_array( $arr['image'] ) ? $arr['image'] : ( $arr['image'] instanceof stdClass ? get_object_vars( $arr['image'] ) : array() ) ) : array();
+					$hit = self::is_media_url( $url_of( 'url' ) ) || self::is_media_url( $url_of( 'src' ) ) || ( isset( $img['url'] ) && self::is_media_url( $img['url'] ) );
+				} elseif ( preg_match( '/^(.+?)(ID|Id|_id)$/', $k, $mm ) ) {
+					$base = $mm[1];
+					$hit  = self::is_media_url( $url_of( $base ) ) || self::is_media_url( $url_of( $base . 'Url' ) ) || self::is_media_url( $url_of( $base . 'URL' ) ) || self::is_media_url( $url_of( $base . '_url' ) ) || ( 'attachment' === $base && self::is_media_url( $url_of( 'url' ) ) );
+				}
+				if ( ! $hit && self::is_media_url( $url_of( $k . '_src' ) ) ) {
+					$hit = true; // Beaver Builder: photo + photo_src.
+				}
+				if ( ! $hit && $siteorigin && in_array( $k, array( 'image', 'attachment_id', 'image_id', 'background_image_attachment', 'image_fallback_id', 'icon_image' ), true ) ) {
+					$hit = true;
+				}
+				if ( $hit ) {
+					$arr[ $k ] = $map( $v );
+					continue;
+				}
+			}
+			if ( in_array( $k, array( 'ids', 'gallery_ids', 'galleryIds', 'images_ids', 'imageIds', 'image_ids' ), true ) && ( is_array( $v ) || $v instanceof stdClass || ( is_string( $v ) && preg_match( '/^\d+(\s*,\s*\d+)*$/', $v ) ) ) ) {
+				$arr[ $k ] = $map( $v instanceof stdClass ? get_object_vars( $v ) : $v );
+				if ( $v instanceof stdClass ) {
+					$arr[ $k ] = (object) $arr[ $k ];
+				}
+				continue;
+			}
+			if ( is_array( $v ) || $v instanceof stdClass ) {
+				$arr[ $k ] = self::walk_structure( $v, $cb, $field, $changed );
+			} elseif ( is_string( $v ) && ( false !== strpos( $v, 'wp-image-' ) || false !== strpos( $v, '[gallery' ) ) ) {
+				$new = self::walk_strings( $v, $cb );
+				if ( $new !== $v ) {
+					$arr[ $k ] = $new;
+					$changed   = true;
+				}
+			}
+		}
+		// Numeric-keyed children (lists).
+		foreach ( $arr as $k => $v ) {
+			if ( is_int( $k ) && ( is_array( $v ) || $v instanceof stdClass ) ) {
+				$arr[ $k ] = self::walk_structure( $v, $cb, $field, $changed );
+			}
+		}
+		if ( $is_obj ) {
+			foreach ( $arr as $k => $v ) {
+				$node->$k = $v;
+			}
+			return $node;
+		}
+		return $arr;
+	}
+
+	/** Polylang keeps translation groups as serialized ID maps in term descriptions. */
+	public static function description_kind( $taxonomy ) {
+		$kinds = apply_filters( 'wpsync_description_id_maps', array( 'post_translations' => 'post', 'term_translations' => 'term' ) );
+		return isset( $kinds[ $taxonomy ] ) ? $kinds[ $taxonomy ] : null;
 	}
 }

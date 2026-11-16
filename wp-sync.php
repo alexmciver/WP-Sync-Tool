@@ -3,7 +3,7 @@
  * Plugin Name:       WP Sync (change puller)
  * Plugin URI:        https://github.com/alexmciver/WP-Sync-Tool
  * Description:       Pull content your client adds or edits on the live site into your local copy without overwriting your own work. Tools → WP Sync, or `wp sync` in the terminal. Install and activate on BOTH live and local.
- * Version:           0.5.1
+ * Version:           0.6.0
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Alex McIver (Alex M Web Design)

@@ -100,7 +100,7 @@ final class WPSync_Logger {
 	}
 
 	public static function post_meta_changed( $meta_id, $object_id, $meta_key ) {
-		if ( self::$suspended || in_array( $meta_key, WPSync_Config::ignored_meta_keys(), true ) ) {
+		if ( self::$suspended || WPSync_Config::is_ignored_meta( $meta_key ) ) {
 			return;
 		}
 		self::touch_post( $object_id );
@@ -203,7 +203,7 @@ final class WPSync_Logger {
 	}
 
 	public static function term_meta_changed( $meta_id, $object_id, $meta_key ) {
-		if ( self::$suspended || in_array( $meta_key, WPSync_Config::ignored_meta_keys(), true ) ) {
+		if ( self::$suspended || WPSync_Config::is_ignored_meta( $meta_key ) ) {
 			return;
 		}
 		self::touch_term( $object_id );

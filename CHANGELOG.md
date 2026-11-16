@@ -2,6 +2,15 @@
 
 All notable changes to WP Sync. Versions follow [semantic versioning](https://semver.org/); while in 0.x, minor versions may add features and change behaviour.
 
+## 0.6.0 – tested with popular page builders
+- New end-to-end test suite (`tests/run.sh`): builds a real live and local site with different IDs and table prefixes and checks 162 things across Gutenberg, Elementor, Beaver Builder, SiteOrigin, Spectra, Kadence Blocks, GenerateBlocks, Divi 4/5 content, WooCommerce (simple, variable, attributes), ACF, Yoast, Polylang, menus, conflicts and *Copy everything*.
+- **Fix:** a pull could stop part-way on sites using Beaver Builder (and other plugins that save PHP objects in custom fields). Custom fields are now copied byte-for-byte, with URLs rewritten safely.
+- **Fix:** simply viewing a page on local could make WP Sync think you'd edited it, because plugins (Elementor, Spectra, Kadence, GenerateBlocks, Divi and others) save cache data when a page is displayed. That caused live edits to show up as conflicts. Plugin caches are now ignored.
+- **Fix:** Yoast SEO titles and descriptions now show on local straight after a pull (Yoast's own copy of the data is refreshed).
+- Page builder images and links are re-pointed in more places: Beaver Builder, SiteOrigin, Bricks, Oxygen, Brizy, Spectra, Kadence and GenerateBlocks blocks, Yoast primary category and social images, Rank Math.
+- New WooCommerce product attributes (e.g. Colour) are created locally when needed.
+- New filter `wpsync_ignored_meta_patterns` and actions `wpsync_imported_post` / `wpsync_imported_term`.
+
 ## 0.5.1
 - Released as open source under GPL-2.0-or-later.
 - Plugin headers declare requirements (WordPress 5.8+, PHP 7.4+), licence and links.

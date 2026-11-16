@@ -140,6 +140,10 @@ final class WPSync_Importer {
 			foreach ( $value as $k => $v ) {
 				$value[ $k ] = $this->urls( $v );
 			}
+		} elseif ( $value instanceof stdClass ) {
+			foreach ( get_object_vars( $value ) as $k => $v ) {
+				$value->$k = $this->urls( $v );
+			}
 		}
 		return $value;
 	}
@@ -167,6 +171,13 @@ final class WPSync_Importer {
 			for ( $i = 0; $i < count( $this->ref_queue ); $i++ ) {
 				list( $item, $id ) = $this->ref_queue[ $i ];
 				$this->apply_refs( $item, $id );
+			}
+			foreach ( $this->ref_queue as $done ) {
+				if ( in_array( $done[0]['type'], array( 'post', 'term' ), true ) ) {
+					self::refresh_plugin_data( $done[0]['type'], (int) $done[1] );
+					/** Fires after WP Sync has fully written a pulled post or term. */
+					do_action( 'wpsync_imported_' . $done[0]['type'], (int) $done[1], $done[0] );
+				}
 			}
 		} finally {
 			wp_defer_term_counting( false );
@@ -533,6 +544,21 @@ final class WPSync_Importer {
 		return $this->handle( $obj );
 	}
 
+	/**
+	 * Some plugins keep their own copy of a post's data in separate tables, built when
+	 * the post is saved. WP Sync writes meta directly, so drop those copies and let the
+	 * plugin rebuild them from the pulled data.
+	 */
+	public static function refresh_plugin_data( $type, $id ) {
+		global $wpdb;
+		if ( defined( 'WPSEO_VERSION' ) ) { // Yoast SEO indexables.
+			$table = $wpdb->prefix . 'yoast_indexable';
+			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table ) {
+				$wpdb->delete( $table, array( 'object_id' => $id, 'object_type' => $type ) );
+			}
+		}
+	}
+
 	private function apply_refs( array $item, $id ) {
 		global $wpdb;
 		$idmap = isset( $item['idmap'] ) && is_array( $item['idmap'] ) ? $item['idmap'] : array();
@@ -565,7 +591,16 @@ final class WPSync_Importer {
 		if ( 'term' === $kind ) {
 			$t      = $item['term'];
 			$parent = $t['parent'] ? (int) $cb( 'term', $t['parent'] ) : 0;
-			$desc   = WPSync_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' );
+			$dkind  = WPSync_Refs::description_kind( $t['taxonomy'] );
+			if ( $dkind ) {
+				// Polylang translation group: a serialized map of language => object ID.
+				$map  = WPSync_Payload::unserialize( $t['description'] );
+				$desc = is_array( $map ) ? maybe_serialize( WPSync_Refs::map_value( $map, function ( $rid ) use ( $cb, $dkind ) {
+					return $cb( $dkind, $rid );
+				} ) ) : $t['description'];
+			} else {
+				$desc = WPSync_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' );
+			}
 			$wpdb->update( $wpdb->term_taxonomy, array( 'parent' => $parent, 'description' => $desc ), array( 'term_id' => $id, 'taxonomy' => $t['taxonomy'] ) );
 			clean_term_cache( $id, $t['taxonomy'] );
 			return;
@@ -580,7 +615,9 @@ final class WPSync_Importer {
 			}
 			$values = array();
 			foreach ( (array) $meta[ $ck ] as $raw ) {
-				$values[] = WPSync_Refs::walk_content( $this->urls( WPSync_Payload::unserialize( $raw ) ), $cb, $ck );
+				// URLs first (serialization-safe, on the raw value), then IDs.
+				$raw      = $this->url_from ? WPSync_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
+				$values[] = WPSync_Refs::walk_value( WPSync_Payload::unserialize( $raw ), $cb, $ck );
 			}
 			$this->write_meta( 'post', $id, $ck, $values );
 		}
@@ -679,6 +716,16 @@ final class WPSync_Importer {
 
 	private function upsert_term( array $item, $local ) {
 		$t = $item['term'];
+		if ( ! taxonomy_exists( $t['taxonomy'] ) && ! empty( $item['wc_attribute'] ) && function_exists( 'wc_create_attribute' ) ) {
+			// A WooCommerce attribute added on live (e.g. "Colour"): create it here too.
+			if ( ! wc_attribute_taxonomy_id_by_name( $t['taxonomy'] ) ) {
+				$res = wc_create_attribute( $item['wc_attribute'] );
+				if ( is_wp_error( $res ) ) {
+					$this->report['errors'][] = 'Could not create product attribute ' . $item['wc_attribute']['name'] . ': ' . $res->get_error_message();
+				}
+			}
+			register_taxonomy( $t['taxonomy'], array( 'product', 'product_variation' ), array( 'hierarchical' => false, 'show_ui' => false, 'query_var' => true, 'rewrite' => false ) );
+		}
 		if ( ! taxonomy_exists( $t['taxonomy'] ) ) {
 			$this->report['skipped'][] = $this->label( $item ) . ': taxonomy is not registered on this site';
 			return 0;
@@ -708,43 +755,54 @@ final class WPSync_Importer {
 	}
 
 	/** Make this object's meta match live's (except keys handled in the refs pass). */
+	/**
+	 * Make this object's meta match live's (except keys handled in the refs pass).
+	 * Values are copied byte for byte – only URLs are rewritten, safely inside serialized
+	 * data – so plugin objects and formats survive untouched.
+	 */
 	private function sync_meta( $kind, $id, array $remote, array $skip ) {
+		global $wpdb;
 		$ignored = WPSync_Config::ignored_meta_keys();
-		$local   = 'post' === $kind ? (array) get_post_meta( $id ) : (array) get_term_meta( $id );
-
-		foreach ( $local as $key => $raws ) {
-			if ( ! isset( $remote[ $key ] ) && ! in_array( $key, $ignored, true ) && ! in_array( $key, $skip, true ) ) {
-				'post' === $kind ? delete_post_meta( $id, $key ) : delete_term_meta( $id, $key );
+		list( $table, $col ) = 'post' === $kind ? array( $wpdb->postmeta, 'post_id' ) : array( $wpdb->termmeta, 'term_id' );
+		$local = array();
+		foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value FROM {$table} WHERE {$col} = %d ORDER BY meta_id", $id ) ) as $r ) {
+			$local[ $r->meta_key ][] = $r->meta_value;
+		}
+		foreach ( array_keys( $local ) as $key ) {
+			if ( ! isset( $remote[ $key ] ) && ! WPSync_Config::is_ignored_meta( $key ) && ! in_array( $key, $skip, true ) ) {
+				$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) );
 			}
 		}
 		foreach ( $remote as $key => $raws ) {
-			if ( in_array( $key, $ignored, true ) || in_array( $key, $skip, true ) ) {
+			if ( WPSync_Config::is_ignored_meta( $key ) || in_array( (string) $key, $skip, true ) ) {
 				continue;
 			}
-			$values = array();
+			$new = array();
 			foreach ( (array) $raws as $raw ) {
-				$values[] = $this->urls( WPSync_Payload::unserialize( $raw ) );
+				$new[] = $this->url_from ? WPSync_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
 			}
-			// Skip identical values to avoid needless writes.
-			if ( isset( $local[ $key ] ) && array_map( 'maybe_serialize', $values ) === array_values( $local[ $key ] ) ) {
-				continue;
+			if ( isset( $local[ $key ] ) && $new === $local[ $key ] ) {
+				continue; // Already identical.
 			}
-			$this->write_meta( $kind, $id, $key, $values );
+			$this->write_raw_meta( $kind, $id, (string) $key, $new );
 		}
+		'post' === $kind ? wp_cache_delete( $id, 'post_meta' ) : wp_cache_delete( $id, 'term_meta' );
 	}
 
-	private function write_meta( $kind, $id, $key, array $values ) {
-		if ( 'post' === $kind ) {
-			delete_post_meta( $id, $key );
-			foreach ( $values as $v ) {
-				add_post_meta( $id, $key, wp_slash( $v ) );
-			}
-		} else {
-			delete_term_meta( $id, $key );
-			foreach ( $values as $v ) {
-				add_term_meta( $id, $key, wp_slash( $v ) );
-			}
+	/** Replace a meta key's values with raw (already serialized where needed) strings. */
+	private function write_raw_meta( $kind, $id, $key, array $raws ) {
+		global $wpdb;
+		list( $table, $col ) = 'post' === $kind ? array( $wpdb->postmeta, 'post_id' ) : array( $wpdb->termmeta, 'term_id' );
+		$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) );
+		foreach ( $raws as $raw ) {
+			$wpdb->insert( $table, array( $col => $id, 'meta_key' => $key, 'meta_value' => $raw ) );
 		}
+		'post' === $kind ? wp_cache_delete( $id, 'post_meta' ) : wp_cache_delete( $id, 'term_meta' );
+	}
+
+	/** Write PHP values (from the refs pass) without WordPress unslashing/recursing into them. */
+	private function write_meta( $kind, $id, $key, array $values ) {
+		$this->write_raw_meta( $kind, $id, $key, array_map( 'maybe_serialize', $values ) );
 	}
 
 	/**
