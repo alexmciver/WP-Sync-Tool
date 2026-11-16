@@ -121,6 +121,15 @@ final class WPSync_Puller {
 
 		WPSync_Ids::backfill();
 
+		// Safety net: our position in live's change list is beyond live's newest change
+		// (live restored from a backup, or a mistaken copy detection). Rather than say
+		// "nothing to pull", check everything changed on live since the last pull.
+		if ( '' === $since && null === $opts['from'] && (int) get_option( 'wpsync_cursor', 0 ) > (int) $remote['last_id'] ) {
+			$last  = get_option( 'wpsync_last_pull' );
+			$since = $last ? gmdate( 'Y-m-d', strtotime( $last . ' UTC' ) - DAY_IN_SECONDS ) : '1970-01-01';
+			$notices[] = "This site's place in live's change list was out of step, so this pull checks everything changed on live since {$since} instead.";
+		}
+
 		return array(
 			'remote'  => $remote,
 			'mode'    => '' !== $since ? 'scan' : 'changes',

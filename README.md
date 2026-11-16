@@ -120,6 +120,8 @@ Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/cl
 
 ## Troubleshooting
 
+- **"Nothing to pull" but you changed something on live**: on live, open Tools → WP Sync → *Let other sites pull from this one* → **Recent changes recorded on this site**. If your edit isn't listed, it's a kind of change WP Sync doesn't track in normal pulls (Divi Theme Builder, theme/Customizer options, widgets, plugin settings) – use **Copy everything from live**. If it is listed, make sure both sites run the same WP Sync version.
+
 - **"Invalid sync key"**: the key on local doesn't match live's. Copy it again from live's Tools → WP Sync.
 - **401/403, "did not return JSON"**: a security plugin or firewall (Wordfence, Cloudflare, "Disable REST API") is blocking `?rest_route=/wpsync/v1/…` on live. Allow that path.
 - **"Is WP Sync installed…on the live site?" (404)**: the files aren't in live's `wp-content/mu-plugins/`, or the `wp-sync/` folder is missing next to `wp-sync.php`.

@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.4.1';
+	const VERSION  = '0.4.2';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -230,8 +230,18 @@ final class WPSync_Config {
 	 * count as "changed locally", and the copy already contains it, so pulling starts after it.
 	 * Stored as a hash so search-replace during a migration can't rewrite it.
 	 */
+	/**
+	 * This site's address, normalised: home_url() switches between http:// and https://
+	 * with the current request, which must not look like "this site moved".
+	 */
+	public static function fingerprint() {
+		$home = strtolower( (string) get_option( 'home' ) );
+		$home = preg_replace( '#^https?://(www\.)?#', '', untrailingslashit( $home ) );
+		return md5( $home );
+	}
+
 	public static function detect_clone() {
-		$fp     = md5( untrailingslashit( home_url() ) );
+		$fp     = self::fingerprint();
 		$stored = get_option( 'wpsync_fingerprint' );
 		if ( $stored === $fp ) {
 			return false;
@@ -239,6 +249,14 @@ final class WPSync_Config {
 		update_option( 'wpsync_fingerprint', $fp, true );
 		if ( ! $stored ) {
 			return false; // First install.
+		}
+		// Fingerprints from versions before 0.4.2 used home_url() as-is (with http/https).
+		$raw = untrailingslashit( (string) get_option( 'home' ) );
+		$alt = preg_replace( '#^http(s?)://#', '', $raw );
+		foreach ( array( $raw, 'http://' . $alt, 'https://' . $alt, 'http://www.' . $alt, 'https://www.' . $alt ) as $variant ) {
+			if ( md5( $variant ) === $stored ) {
+				return false;
+			}
 		}
 		self::mark_as_clone();
 		return true;
@@ -281,7 +299,7 @@ final class WPSync_Config {
 			add_option( 'wpsync_installed', $first ? $first : gmdate( 'Y-m-d H:i:s' ), '', false );
 		}
 		if ( ! get_option( 'wpsync_fingerprint' ) ) {
-			update_option( 'wpsync_fingerprint', md5( untrailingslashit( home_url() ) ), true );
+			update_option( 'wpsync_fingerprint', self::fingerprint(), true );
 		}
 		if ( $backfill ) {
 			WPSync_Ids::backfill();
