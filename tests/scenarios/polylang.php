@@ -1,6 +1,6 @@
 <?php
 // Polylang: an English page and its French translation stay linked to each other.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 if ( ! t_needs( 'polylang/polylang.php', 'Polylang' ) ) {
 	return;

@@ -1,11 +1,11 @@
-# Contributing to WP Sync
+# Contributing to LivePull
 
 Thanks for helping! Bug reports, ideas and pull requests are all welcome.
 
 ## Reporting a bug
 
 Open an issue with the **Bug report** template and include:
-- WP Sync, WordPress and PHP versions on **both** sites
+- LivePull, WordPress and PHP versions on **both** sites
 - What you did, what you expected, and what happened (error messages help a lot)
 - Relevant plugins or page builders (e.g. Divi, Elementor, ACF, WooCommerce)
 
@@ -21,7 +21,7 @@ Security problems: please report privately instead – see [SECURITY.md](SECURIT
 
 ## Releasing (maintainers)
 
-Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/class-config.php` (`VERSION`), add a `CHANGELOG.md` entry, and push to `main`. The GitHub Action builds `wp-sync.zip` and publishes the release; sites see it as an update.
+Bump the version in **both** `livepull.php` (`Version:`) and `includes/class-config.php` (`VERSION`), add a `CHANGELOG.md` entry, and push to `main`. The GitHub Action builds `livepull.zip` and publishes the release; sites see it as an update.
 
 ## Tests
 

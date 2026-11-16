@@ -1,6 +1,11 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Applies payloads from live to this (local) site.
  *
@@ -8,14 +13,14 @@ defined( 'ABSPATH' ) || exit;
  *  - New on live            → created locally.
  *  - Changed on live only   → updated locally.
  *  - Changed on live AND changed locally since it was last pulled → CONFLICT: left alone and
- *    reported, unless --theirs / `wp sync take` is used.
+ *    reported, unless --theirs / `wp livepull take` is used.
  *  - Deleted on live        → deleted locally (unless changed locally → conflict).
  *
  * Runs in two passes: first every object is created/updated (so everything has a local ID),
  * then every ID reference (parents, featured images, galleries, terms, ACF fields, blocks…)
  * is rewritten to local IDs. Referenced objects missing locally are fetched on demand.
  */
-final class WPSync_Importer {
+final class LivePull_Importer {
 
 	private $client;
 	private $opts;
@@ -43,7 +48,7 @@ final class WPSync_Importer {
 	 * @param array $remote  Response of the live /status endpoint.
 	 * @param array $opts    dry_run, theirs, redownload, url_replace, force (array of "type:sync_id").
 	 */
-	public function __construct( WPSync_Client $client, array $remote, array $opts ) {
+	public function __construct( LivePull_Client $client, array $remote, array $opts ) {
 		$this->client = $client;
 		$this->opts   = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'redownload' => false, 'url_replace' => true, 'force' => array(), 'defer_files' => false ) );
 
@@ -54,7 +59,7 @@ final class WPSync_Importer {
 		// rebuilding these lookups for each handful is slow on big sites.
 		if ( null === self::$shared ) {
 			self::$shared = array(
-				'maps'    => array( 'post' => WPSync_Ids::map( 'post' ), 'term' => WPSync_Ids::map( 'term' ) ),
+				'maps'    => array( 'post' => LivePull_Ids::map( 'post' ), 'term' => LivePull_Ids::map( 'term' ) ),
 				'changed' => self::locally_changed(),
 			);
 		}
@@ -78,14 +83,14 @@ final class WPSync_Importer {
 	 */
 	public static function locally_changed() {
 		global $wpdb;
-		$table  = WPSync_Config::table();
+		$table  = LivePull_Config::table();
 		$synced = array();
-		foreach ( $wpdb->get_results( "SELECT object_type, sync_id, MAX(id) AS last FROM {$table} WHERE source = 'sync' GROUP BY object_type, sync_id" ) as $r ) {
+		foreach ( $wpdb->get_results( $wpdb->prepare( "SELECT object_type, sync_id, MAX(id) AS last FROM %i WHERE source = 'sync' GROUP BY object_type, sync_id", $table ) ) as $r ) {
 			$synced[ $r->object_type . ':' . $r->sync_id ] = (int) $r->last;
 		}
 		$changed = array();
-		$floor   = (int) get_option( 'wpsync_clone_floor', 0 ); // Rows up to here were copied from live.
-		foreach ( $wpdb->get_results( $wpdb->prepare( "SELECT id, object_type, sync_id, action FROM {$table} WHERE source = 'local' AND id > %d ORDER BY id ASC", $floor ) ) as $r ) {
+		$floor   = (int) get_option( 'livepull_clone_floor', 0 ); // Rows up to here were copied from live.
+		foreach ( $wpdb->get_results( $wpdb->prepare( "SELECT id, object_type, sync_id, action FROM %i WHERE source = 'local' AND id > %d ORDER BY id ASC", $table, $floor ) ) as $r ) {
 			$key = $r->object_type . ':' . $r->sync_id;
 			if ( (int) $r->id > ( isset( $synced[ $key ] ) ? $synced[ $key ] : 0 ) ) {
 				$changed[ $key ] = $r->action;
@@ -154,7 +159,7 @@ final class WPSync_Importer {
 		// Terms first, then media, then everything else; deletions last.
 		$items = self::sort_items( $items );
 
-		WPSync_Logger::suspend();
+		LivePull_Logger::suspend();
 		kses_remove_filters();
 		remove_action( 'post_updated', 'wp_save_post_revision', 10 );
 		// Never let a pull trigger outgoing side effects from the local site.
@@ -175,8 +180,8 @@ final class WPSync_Importer {
 			foreach ( $this->ref_queue as $done ) {
 				if ( in_array( $done[0]['type'], array( 'post', 'term' ), true ) ) {
 					self::refresh_plugin_data( $done[0]['type'], (int) $done[1] );
-					/** Fires after WP Sync has fully written a pulled post or term. */
-					do_action( 'wpsync_imported_' . $done[0]['type'], (int) $done[1], $done[0] );
+					/** Fires after LivePull has fully written a pulled post or term. */
+					do_action( 'livepull_imported_' . $done[0]['type'], (int) $done[1], $done[0] );
 				}
 			}
 		} finally {
@@ -185,7 +190,7 @@ final class WPSync_Importer {
 			add_action( 'publish_post', '_publish_post_hook', 5, 1 );
 			remove_filter( 'pre_wp_mail', '__return_false', 999 );
 			remove_filter( 'woocommerce_webhook_should_deliver', '__return_false', 999 );
-			WPSync_Logger::resume();
+			LivePull_Logger::resume();
 		}
 		return $this->report;
 	}
@@ -242,8 +247,8 @@ final class WPSync_Importer {
 	}
 
 	public static function option_name( $sid ) {
-		foreach ( WPSync_Config::pulled_option_names() as $n ) {
-			if ( WPSync_Config::option_sid( $n ) === $sid ) {
+		foreach ( LivePull_Config::pulled_option_names() as $n ) {
+			if ( LivePull_Config::option_sid( $n ) === $sid ) {
 				return $n;
 			}
 		}
@@ -261,7 +266,7 @@ final class WPSync_Importer {
 		}
 		if ( ! empty( $item['deleted'] ) ) {
 			$name = self::option_name( $item['sync_id'] );
-			if ( $name && true === WPSync_Config::option_spec( $name ) && false !== get_option( $name, false ) ) {
+			if ( $name && true === LivePull_Config::option_spec( $name ) && false !== get_option( $name, false ) ) {
 				if ( ! $this->opts['dry_run'] ) {
 					delete_option( $name );
 					$this->mark_synced( 'option', $item['sync_id'], 0 );
@@ -283,28 +288,28 @@ final class WPSync_Importer {
 	/** Skip settings that already match (ignoring ID differences, which are rewritten later). */
 	private function option_differs( array $item ) {
 		$o   = $item['option'];
-		$new = $this->urls( WPSync_Payload::unserialize( $o['value'] ) );
+		$new = $this->urls( LivePull_Payload::unserialize( $o['value'] ) );
 		$cur = get_option( $o['name'], null );
 		if ( 'keys' === $o['mode'] ) {
 			$cur = is_array( $cur ) ? array_intersect_key( $cur, (array) $new ) : array();
 		}
-		return maybe_serialize( $cur ) !== maybe_serialize( $new ) || WPSync_Config::option_refs( $o['name'] );
+		return maybe_serialize( $cur ) !== maybe_serialize( $new ) || LivePull_Config::option_refs( $o['name'] );
 	}
 
 	private function apply_option( array $item, $cb ) {
 		$o     = $item['option'];
-		$value = $this->urls( WPSync_Payload::unserialize( $o['value'] ) );
-		$refs  = WPSync_Config::option_refs( $o['name'] );
+		$value = $this->urls( LivePull_Payload::unserialize( $o['value'] ) );
+		$refs  = LivePull_Config::option_refs( $o['name'] );
 		if ( is_array( $refs ) && is_array( $value ) ) {
 			foreach ( $refs as $k => $kind ) {
 				if ( isset( $value[ $k ] ) ) {
-					$value[ $k ] = WPSync_Refs::map_value( $value[ $k ], function ( $id ) use ( $cb, $kind ) {
+					$value[ $k ] = LivePull_Refs::map_value( $value[ $k ], function ( $id ) use ( $cb, $kind ) {
 						return $cb( $kind, $id );
 					} );
 				}
 			}
 		} elseif ( is_string( $refs ) ) {
-			$value = WPSync_Refs::map_value( $value, function ( $id ) use ( $cb, $refs ) {
+			$value = LivePull_Refs::map_value( $value, function ( $id ) use ( $cb, $refs ) {
 				return $cb( $refs, $id );
 			} );
 		}
@@ -456,10 +461,11 @@ final class WPSync_Importer {
 			if ( in_array( $id, $taken, true ) ) {
 				continue;
 			}
-			$csid = 'term' === $item['type'] ? WPSync_Ids::for_term( $id ) : WPSync_Ids::for_post( $id );
+			$csid = 'term' === $item['type'] ? LivePull_Ids::for_term( $id ) : LivePull_Ids::for_post( $id );
 			// Already linked to a (different) live item by an earlier pull? Then it isn't this one.
 			$linked = (int) $wpdb->get_var( $wpdb->prepare(
-				'SELECT COUNT(*) FROM ' . WPSync_Config::table() . " WHERE source = 'sync' AND object_type = %s AND sync_id = %s",
+				"SELECT COUNT(*) FROM %i WHERE source = 'sync' AND object_type = %s AND sync_id = %s",
+				LivePull_Config::table(),
 				$item['type'],
 				$csid
 			) );
@@ -474,7 +480,7 @@ final class WPSync_Importer {
 	/** Point a local object at a live sync ID, carrying its local-change history across. */
 	private function relink( $type, $local, $new_sid ) {
 		global $wpdb;
-		$old_sid = 'term' === $type ? WPSync_Ids::for_term( $local ) : WPSync_Ids::for_post( $local );
+		$old_sid = 'term' === $type ? LivePull_Ids::for_term( $local ) : LivePull_Ids::for_post( $local );
 		if ( ! $old_sid || $old_sid === $new_sid ) {
 			return;
 		}
@@ -490,11 +496,11 @@ final class WPSync_Importer {
 			return;
 		}
 		if ( 'term' === $type ) {
-			update_term_meta( $local, WPSync_Config::META_KEY, $new_sid );
+			update_term_meta( $local, LivePull_Config::META_KEY, $new_sid );
 		} else {
-			update_post_meta( $local, WPSync_Config::META_KEY, $new_sid );
+			update_post_meta( $local, LivePull_Config::META_KEY, $new_sid );
 		}
-		$wpdb->update( WPSync_Config::table(), array( 'sync_id' => $new_sid ), array( 'object_type' => $type, 'sync_id' => $old_sid ) );
+		$wpdb->update( LivePull_Config::table(), array( 'sync_id' => $new_sid ), array( 'object_type' => $type, 'sync_id' => $old_sid ) );
 	}
 
 	private function conflict( $key, $item, $local, $reason ) {
@@ -507,7 +513,7 @@ final class WPSync_Importer {
 	}
 
 	private function mark_synced( $type, $sid, $id ) {
-		WPSync_Logger::insert( $type, $sid, $id, 'synced', 'sync' );
+		LivePull_Logger::insert( $type, $sid, $id, 'synced', 'sync' );
 		unset( $this->local_changed[ $type . ':' . $sid ] );
 	}
 
@@ -546,7 +552,7 @@ final class WPSync_Importer {
 
 	/**
 	 * Some plugins keep their own copy of a post's data in separate tables, built when
-	 * the post is saved. WP Sync writes meta directly, so drop those copies and let the
+	 * the post is saved. LivePull writes meta directly, so drop those copies and let the
 	 * plugin rebuild them from the pulled data.
 	 */
 	public static function refresh_plugin_data( $type, $id ) {
@@ -581,7 +587,7 @@ final class WPSync_Importer {
 			}
 			$values = array();
 			foreach ( (array) $meta[ $key ] as $raw ) {
-				$values[] = WPSync_Refs::map_value( WPSync_Payload::unserialize( $raw ), function ( $rid ) use ( $cb, $ref_kind ) {
+				$values[] = LivePull_Refs::map_value( LivePull_Payload::unserialize( $raw ), function ( $rid ) use ( $cb, $ref_kind ) {
 					return $cb( $ref_kind, $rid );
 				} );
 			}
@@ -591,15 +597,15 @@ final class WPSync_Importer {
 		if ( 'term' === $kind ) {
 			$t      = $item['term'];
 			$parent = $t['parent'] ? (int) $cb( 'term', $t['parent'] ) : 0;
-			$dkind  = WPSync_Refs::description_kind( $t['taxonomy'] );
+			$dkind  = LivePull_Refs::description_kind( $t['taxonomy'] );
 			if ( $dkind ) {
 				// Polylang translation group: a serialized map of language => object ID.
-				$map  = WPSync_Payload::unserialize( $t['description'] );
-				$desc = is_array( $map ) ? maybe_serialize( WPSync_Refs::map_value( $map, function ( $rid ) use ( $cb, $dkind ) {
+				$map  = LivePull_Payload::unserialize( $t['description'] );
+				$desc = is_array( $map ) ? maybe_serialize( LivePull_Refs::map_value( $map, function ( $rid ) use ( $cb, $dkind ) {
 					return $cb( $dkind, $rid );
 				} ) ) : $t['description'];
 			} else {
-				$desc = WPSync_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' );
+				$desc = LivePull_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' );
 			}
 			$wpdb->update( $wpdb->term_taxonomy, array( 'parent' => $parent, 'description' => $desc ), array( 'term_id' => $id, 'taxonomy' => $t['taxonomy'] ) );
 			clean_term_cache( $id, $t['taxonomy'] );
@@ -609,15 +615,15 @@ final class WPSync_Importer {
 		$p = $item['post'];
 
 		// Page-builder data stored in meta (Elementor etc.).
-		foreach ( WPSync_Refs::content_meta_keys() as $ck ) {
+		foreach ( LivePull_Refs::content_meta_keys() as $ck ) {
 			if ( ! isset( $meta[ $ck ] ) ) {
 				continue;
 			}
 			$values = array();
 			foreach ( (array) $meta[ $ck ] as $raw ) {
 				// URLs first (serialization-safe, on the raw value), then IDs.
-				$raw      = $this->url_from ? WPSync_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
-				$values[] = WPSync_Refs::walk_value( WPSync_Payload::unserialize( $raw ), $cb, $ck );
+				$raw      = $this->url_from ? LivePull_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
+				$values[] = LivePull_Refs::walk_value( LivePull_Payload::unserialize( $raw ), $cb, $ck );
 			}
 			$this->write_meta( 'post', $id, $ck, $values );
 		}
@@ -627,8 +633,8 @@ final class WPSync_Importer {
 			$wpdb->posts,
 			array(
 				'post_parent'  => $p['post_parent'] ? (int) $cb( 'post', $p['post_parent'] ) : 0,
-				'post_content' => WPSync_Refs::walk_content( $this->urls( $p['post_content'] ), $cb, 'post_content' ),
-				'post_excerpt' => WPSync_Refs::walk_content( $this->urls( $p['post_excerpt'] ), $cb, 'post_excerpt' ),
+				'post_content' => LivePull_Refs::walk_content( $this->urls( $p['post_content'] ), $cb, 'post_content' ),
+				'post_excerpt' => LivePull_Refs::walk_content( $this->urls( $p['post_excerpt'] ), $cb, 'post_excerpt' ),
 			),
 			array( 'ID' => $id )
 		);
@@ -703,9 +709,9 @@ final class WPSync_Importer {
 			$wpdb->update( $wpdb->posts, array( 'guid' => $data['guid'] ), array( 'ID' => $id ) );
 		}
 
-		$skip = array_merge( array_keys( (array) $item['ref_keys'] ), WPSync_Refs::content_meta_keys() );
+		$skip = array_merge( array_keys( (array) $item['ref_keys'] ), LivePull_Refs::content_meta_keys() );
 		$this->sync_meta( 'post', $id, (array) $item['meta'], $skip );
-		update_post_meta( $id, WPSync_Config::META_KEY, $item['sync_id'] );
+		update_post_meta( $id, LivePull_Config::META_KEY, $item['sync_id'] );
 		clean_post_cache( $id );
 
 		if ( ! empty( $item['files'] ) ) {
@@ -750,7 +756,7 @@ final class WPSync_Importer {
 			$id = (int) $res['term_id'];
 		}
 		$this->sync_meta( 'term', $id, (array) $item['meta'], array_keys( (array) $item['ref_keys'] ) );
-		update_term_meta( $id, WPSync_Config::META_KEY, $item['sync_id'] );
+		update_term_meta( $id, LivePull_Config::META_KEY, $item['sync_id'] );
 		return $id;
 	}
 
@@ -762,24 +768,24 @@ final class WPSync_Importer {
 	 */
 	private function sync_meta( $kind, $id, array $remote, array $skip ) {
 		global $wpdb;
-		$ignored = WPSync_Config::ignored_meta_keys();
+		$ignored = LivePull_Config::ignored_meta_keys();
 		list( $table, $col ) = 'post' === $kind ? array( $wpdb->postmeta, 'post_id' ) : array( $wpdb->termmeta, 'term_id' );
 		$local = array();
-		foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value FROM {$table} WHERE {$col} = %d ORDER BY meta_id", $id ) ) as $r ) {
+		foreach ( (array) $wpdb->get_results( $wpdb->prepare( 'SELECT meta_key, meta_value FROM %i WHERE %i = %d ORDER BY meta_id', $table, $col, $id ) ) as $r ) {
 			$local[ $r->meta_key ][] = $r->meta_value;
 		}
 		foreach ( array_keys( $local ) as $key ) {
-			if ( ! isset( $remote[ $key ] ) && ! WPSync_Config::is_ignored_meta( $key ) && ! in_array( $key, $skip, true ) ) {
-				$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) );
+			if ( ! isset( $remote[ $key ] ) && ! LivePull_Config::is_ignored_meta( $key ) && ! in_array( $key, $skip, true ) ) {
+				$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 			}
 		}
 		foreach ( $remote as $key => $raws ) {
-			if ( WPSync_Config::is_ignored_meta( $key ) || in_array( (string) $key, $skip, true ) ) {
+			if ( LivePull_Config::is_ignored_meta( $key ) || in_array( (string) $key, $skip, true ) ) {
 				continue;
 			}
 			$new = array();
 			foreach ( (array) $raws as $raw ) {
-				$new[] = $this->url_from ? WPSync_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
+				$new[] = $this->url_from ? LivePull_Serial::replace( (string) $raw, $this->url_from, $this->url_to ) : (string) $raw;
 			}
 			if ( isset( $local[ $key ] ) && $new === $local[ $key ] ) {
 				continue; // Already identical.
@@ -793,9 +799,9 @@ final class WPSync_Importer {
 	private function write_raw_meta( $kind, $id, $key, array $raws ) {
 		global $wpdb;
 		list( $table, $col ) = 'post' === $kind ? array( $wpdb->postmeta, 'post_id' ) : array( $wpdb->termmeta, 'term_id' );
-		$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) );
+		$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 		foreach ( $raws as $raw ) {
-			$wpdb->insert( $table, array( $col => $id, 'meta_key' => $key, 'meta_value' => $raw ) );
+			$wpdb->insert( $table, array( $col => $id, 'meta_key' => $key, 'meta_value' => $raw ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 		}
 		'post' === $kind ? wp_cache_delete( $id, 'post_meta' ) : wp_cache_delete( $id, 'term_meta' );
 	}
@@ -858,8 +864,8 @@ final class WPSync_Importer {
 			return $this->authors[ $login ];
 		}
 		$user = $login ? get_user_by( 'login', $login ) : false;
-		if ( ! $user && defined( 'WPSYNC_DEFAULT_AUTHOR' ) ) {
-			$user = get_user_by( 'login', WPSYNC_DEFAULT_AUTHOR );
+		if ( ! $user && defined( 'LIVEPULL_DEFAULT_AUTHOR' ) ) {
+			$user = get_user_by( 'login', LIVEPULL_DEFAULT_AUTHOR );
 		}
 		if ( ! $user ) {
 			$admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'orderby' => 'ID' ) );

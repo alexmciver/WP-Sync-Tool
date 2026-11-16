@@ -1,19 +1,24 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Pull content changes from the live site into this local copy.
- * Same engine as Tools → WP Sync in WP admin.
+ * Same engine as Tools → LivePull in WP admin.
  *
  * ## EXAMPLES
  *
- *     wp sync status
- *     wp sync pull --dry-run
- *     wp sync pull
- *     wp sync conflicts
- *     wp sync take 512
+ *     wp livepull status
+ *     wp livepull pull --dry-run
+ *     wp livepull pull
+ *     wp livepull conflicts
+ *     wp livepull take 512
  */
-class WPSync_CLI {
+class LivePull_CLI {
 
 	/**
 	 * Create the log table and give all existing content a sync ID. Safe to re-run.
@@ -21,8 +26,8 @@ class WPSync_CLI {
 	 * @subcommand init
 	 */
 	public function init_( $args, $assoc ) {
-		WPSync_Config::install( false );
-		$r = WPSync_Ids::backfill();
+		LivePull_Config::install( false );
+		$r = LivePull_Ids::backfill();
 		WP_CLI::success( sprintf( 'Ready. Newly stamped: %d posts, %d terms. Duplicates fixed: %d.', $r['posts'], $r['terms'], $r['dupes'] ) );
 	}
 
@@ -32,17 +37,17 @@ class WPSync_CLI {
 	 * ## OPTIONS
 	 *
 	 * <code-or-url>
-	 * : The connection code from the live site's Tools → WP Sync screen (or its URL).
+	 * : The connection code from the live site's Tools → LivePull screen (or its URL).
 	 *
 	 * [<key>]
 	 * : The key, if you gave a URL instead of a connection code.
 	 */
 	public function connect( $args, $assoc ) {
-		if ( defined( 'WPSYNC_REMOTE' ) ) {
-			WP_CLI::error( 'WPSYNC_REMOTE is set in wp-config.php; change it there.' );
+		if ( defined( 'LIVEPULL_REMOTE' ) ) {
+			WP_CLI::error( 'LIVEPULL_REMOTE is set in wp-config.php; change it there.' );
 		}
 		require_once __DIR__ . '/class-admin.php';
-		$code = WPSync_Admin::parse_code( $args[0] );
+		$code = LivePull_Admin::parse_code( $args[0] );
 		if ( $code ) {
 			list( $url, $key ) = $code;
 		} elseif ( isset( $args[1] ) ) {
@@ -50,8 +55,8 @@ class WPSync_CLI {
 		} else {
 			WP_CLI::error( 'Give the connection code from live, or its URL followed by the key.' );
 		}
-		update_option( 'wpsync_remote', $url, false );
-		update_option( 'wpsync_remote_secret', $key, false );
+		update_option( 'livepull_remote', $url, false );
+		update_option( 'livepull_remote_secret', $key, false );
 		$this->status( array(), array() );
 	}
 
@@ -60,21 +65,21 @@ class WPSync_CLI {
 	 */
 	public function status( $args, $assoc ) {
 		$notices = array();
-		$remote  = WPSync_Puller::connect( $notices );
+		$remote  = LivePull_Puller::connect( $notices );
 		if ( is_wp_error( $remote ) ) {
 			WP_CLI::error( $remote->get_error_message() );
 		}
 		foreach ( $notices as $n ) {
 			WP_CLI::log( WP_CLI::colorize( '%B' . $n . '%n' ) );
 		}
-		$cursor = (int) get_option( 'wpsync_cursor', 0 );
-		$last   = get_option( 'wpsync_last_pull' );
-		WP_CLI::log( 'Live site:        ' . $remote['home'] . ' (WP Sync ' . $remote['version'] . ')' );
+		$cursor = (int) get_option( 'livepull_cursor', 0 );
+		$last   = get_option( 'livepull_last_pull' );
+		WP_CLI::log( 'Live site:        ' . $remote['home'] . ' (LivePull ' . $remote['version'] . ')' );
 		WP_CLI::log( 'This site:        ' . home_url() );
 		WP_CLI::log( 'Last pull:        ' . ( $last ? $last . ' UTC' : 'never' ) );
 		WP_CLI::log( 'Changes waiting on live:           ' . max( 0, (int) $remote['last_id'] - $cursor ) );
-		WP_CLI::log( 'Changed here since last pulled:    ' . count( WPSync_Importer::locally_changed() ) );
-		WP_CLI::log( 'Unresolved conflicts:              ' . count( WPSync_Puller::conflicts() ) );
+		WP_CLI::log( 'Changed here since last pulled:    ' . count( LivePull_Importer::locally_changed() ) );
+		WP_CLI::log( 'Unresolved conflicts:              ' . count( LivePull_Puller::conflicts() ) );
 	}
 
 	/**
@@ -90,7 +95,7 @@ class WPSync_CLI {
 	 *
 	 * [--since=<date>]
 	 * : Catch-up mode (YYYY-MM-DD). Pulls everything modified on live since this date, for when
-	 * your local copy was made before WP Sync was installed on live.
+	 * your local copy was made before LivePull was installed on live.
 	 *
 	 * [--from=<log-id>]
 	 * : Start from this live log ID instead of where the last pull finished (0 = from the beginning).
@@ -109,15 +114,15 @@ class WPSync_CLI {
 	 *
 	 * ## EXAMPLES
 	 *
-	 *     wp sync pull --dry-run
-	 *     wp sync pull
-	 *     wp sync pull --since=2026-10-01
+	 *     wp livepull pull --dry-run
+	 *     wp livepull pull
+	 *     wp livepull pull --since=2026-10-01
 	 */
 	public function pull( $args, $assoc ) {
 		$flag  = function ( $k, $d = false ) use ( $assoc ) {
 			return \WP_CLI\Utils\get_flag_value( $assoc, $k, $d );
 		};
-		$state = WPSync_Puller::start( array(
+		$state = LivePull_Puller::start( array(
 			'dry_run'     => $flag( 'dry-run' ),
 			'theirs'      => $flag( 'theirs' ),
 			'since'       => isset( $assoc['since'] ) ? $assoc['since'] : '',
@@ -135,7 +140,7 @@ class WPSync_CLI {
 		}
 		$shown_backup = false;
 		do {
-			$state = WPSync_Puller::step( $state, 5 );
+			$state = LivePull_Puller::step( $state, 5 );
 			if ( is_wp_error( $state ) ) {
 				WP_CLI::error( $state->get_error_message() );
 			}
@@ -154,7 +159,7 @@ class WPSync_CLI {
 	 * List items changed on live AND locally, which pulls left alone.
 	 */
 	public function conflicts( $args, $assoc ) {
-		$conflicts = WPSync_Puller::conflicts();
+		$conflicts = LivePull_Puller::conflicts();
 		if ( ! $conflicts ) {
 			WP_CLI::success( 'No unresolved conflicts.' );
 			return;
@@ -166,8 +171,8 @@ class WPSync_CLI {
 			$rows[] = array(
 				'item'              => $c['label'],
 				'reason'            => $c['reason'],
-				'take live version' => 'wp sync take ' . $ref . ( $term ? ' --term' : '' ),
-				'keep yours'        => 'wp sync keep ' . $ref . ( $term ? ' --term' : '' ),
+				'take live version' => 'wp livepull take ' . $ref . ( $term ? ' --term' : '' ),
+				'keep yours'        => 'wp livepull keep ' . $ref . ( $term ? ' --term' : '' ),
 			);
 		}
 		\WP_CLI\Utils\format_items( 'table', $rows, array( 'item', 'reason', 'take live version', 'keep yours' ) );
@@ -185,11 +190,11 @@ class WPSync_CLI {
 	 * : The ID is a term, not a post.
 	 */
 	public function take( $args, $assoc ) {
-		$key = WPSync_Puller::key_from( $args[0], \WP_CLI\Utils\get_flag_value( $assoc, 'term', false ) ? 'term' : 'post' );
+		$key = LivePull_Puller::key_from( $args[0], \WP_CLI\Utils\get_flag_value( $assoc, 'term', false ) ? 'term' : 'post' );
 		if ( is_wp_error( $key ) ) {
 			WP_CLI::error( $key->get_error_message() );
 		}
-		$report = WPSync_Puller::take( $key );
+		$report = LivePull_Puller::take( $key );
 		if ( is_wp_error( $report ) ) {
 			WP_CLI::error( $report->get_error_message() );
 		}
@@ -208,11 +213,11 @@ class WPSync_CLI {
 	 * : The ID is a term, not a post.
 	 */
 	public function keep( $args, $assoc ) {
-		$key = WPSync_Puller::key_from( $args[0], \WP_CLI\Utils\get_flag_value( $assoc, 'term', false ) ? 'term' : 'post' );
+		$key = LivePull_Puller::key_from( $args[0], \WP_CLI\Utils\get_flag_value( $assoc, 'term', false ) ? 'term' : 'post' );
 		if ( is_wp_error( $key ) ) {
 			WP_CLI::error( $key->get_error_message() );
 		}
-		WPSync_Puller::keep( $key );
+		LivePull_Puller::keep( $key );
 		WP_CLI::success( 'Keeping your local version. If live edits it again you will be warned again.' );
 	}
 
@@ -222,7 +227,7 @@ class WPSync_CLI {
 	 * @subcommand local-changes
 	 */
 	public function local_changes( $args, $assoc ) {
-		$rows = WPSync_Puller::local_changes();
+		$rows = LivePull_Puller::local_changes();
 		if ( ! $rows ) {
 			WP_CLI::success( 'Nothing changed locally since the last pull.' );
 			return;
@@ -233,7 +238,7 @@ class WPSync_CLI {
 	/**
 	 * Replace this site's whole database (and optionally uploads) with a copy of live.
 	 *
-	 * Backs up first. Keeps this site's URL, WP Sync connection and search-engine setting.
+	 * Backs up first. Keeps this site's URL, LivePull connection and search-engine setting.
 	 *
 	 * ## OPTIONS
 	 *
@@ -247,13 +252,13 @@ class WPSync_CLI {
 	 */
 	public function clone_( $args, $assoc ) {
 		WP_CLI::confirm( "Replace this site's WHOLE database with a copy of live? (It's backed up first.)", $assoc );
-		$state = WPSync_Full::start( array( 'files' => ! \WP_CLI\Utils\get_flag_value( $assoc, 'skip-files', false ) ) );
+		$state = LivePull_Full::start( array( 'files' => ! \WP_CLI\Utils\get_flag_value( $assoc, 'skip-files', false ) ) );
 		if ( is_wp_error( $state ) ) {
 			WP_CLI::error( $state->get_error_message() );
 		}
 		$last = '';
 		do {
-			$state = WPSync_Full::step( $state, 3 );
+			$state = LivePull_Full::step( $state, 3 );
 			if ( is_wp_error( $state ) ) {
 				WP_CLI::error( $state->get_error_message() . ' Nothing on this site was changed.' );
 			}
@@ -278,26 +283,26 @@ class WPSync_CLI {
 	 * ## OPTIONS
 	 *
 	 * [<file>]
-	 * : Backup file name (see `wp sync backups`). Defaults to the most recent.
+	 * : Backup file name (see `wp livepull backups`). Defaults to the most recent.
 	 *
 	 * [--yes]
 	 * : Don't ask for confirmation.
 	 */
 	public function restore( $args, $assoc ) {
-		$all = WPSync_Backup::all();
+		$all = LivePull_Backup::all();
 		if ( ! $all ) {
-			WP_CLI::error( 'No backups found in wp-content/wpsync-backups/.' );
+			WP_CLI::error( 'No backups found in wp-content/livepull-backups/.' );
 		}
-		$file = isset( $args[0] ) ? WPSync_Backup::find( $args[0] ) : $all[0]['file'];
+		$file = isset( $args[0] ) ? LivePull_Backup::find( $args[0] ) : $all[0]['file'];
 		if ( ! $file ) {
-			WP_CLI::error( 'Backup not found. Run `wp sync backups` to list them.' );
+			WP_CLI::error( 'Backup not found. Run `wp livepull backups` to list them.' );
 		}
 		WP_CLI::confirm( 'Restore ' . basename( $file ) . '? Everything pulled or edited since then will be undone.', $assoc );
-		$now = WPSync_Backup::create();
+		$now = LivePull_Backup::create();
 		if ( ! is_wp_error( $now ) ) {
 			WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
 		}
-		$res = WPSync_Backup::restore( $file );
+		$res = LivePull_Backup::restore( $file );
 		if ( is_wp_error( $res ) ) {
 			WP_CLI::error( $res->get_error_message() );
 		}
@@ -309,7 +314,7 @@ class WPSync_CLI {
 	 */
 	public function backups( $args, $assoc ) {
 		$rows = array();
-		foreach ( WPSync_Backup::all() as $b ) {
+		foreach ( LivePull_Backup::all() as $b ) {
 			$rows[] = array( 'file' => $b['name'], 'taken' => wp_date( 'Y-m-d H:i:s', $b['time'] ), 'size' => size_format( $b['size'] ) );
 		}
 		$rows ? \WP_CLI\Utils\format_items( 'table', $rows, array( 'file', 'taken', 'size' ) ) : WP_CLI::log( 'No backups yet.' );
@@ -321,19 +326,19 @@ class WPSync_CLI {
 	 * @subcommand key
 	 */
 	public function key_( $args, $assoc ) {
-		$secret = WPSync_Config::secret();
+		$secret = LivePull_Config::secret();
 		if ( strlen( $secret ) < 32 ) {
-			if ( defined( 'WPSYNC_SECRET' ) ) {
-				WP_CLI::error( 'WPSYNC_SECRET in wp-config.php is shorter than 32 characters.' );
+			if ( defined( 'LIVEPULL_SECRET' ) ) {
+				WP_CLI::error( 'LIVEPULL_SECRET in wp-config.php is shorter than 32 characters.' );
 			}
 			$secret = bin2hex( random_bytes( 32 ) );
-			update_option( 'wpsync_secret', $secret, false );
+			update_option( 'livepull_secret', $secret, false );
 			WP_CLI::log( 'Generated a new key.' );
 		}
 		WP_CLI::log( 'URL: ' . home_url() );
 		WP_CLI::log( 'Key: ' . $secret );
 		require_once __DIR__ . '/class-admin.php';
-		WP_CLI::log( 'On your local site run:  wp sync connect ' . WPSync_Admin::make_code() );
+		WP_CLI::log( 'On your local site run:  wp livepull connect ' . LivePull_Admin::make_code() );
 	}
 
 	/**
@@ -350,7 +355,7 @@ class WPSync_CLI {
 	public function prune( $args, $assoc ) {
 		global $wpdb;
 		$days = max( 1, (int) $assoc['days'] );
-		$n    = $wpdb->query( $wpdb->prepare( 'DELETE FROM ' . WPSync_Config::table() . ' WHERE created_at < %s', gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ) ) );
+		$n    = $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE created_at < %s', LivePull_Config::table(), gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ) ) );
 		WP_CLI::success( "Deleted {$n} log rows older than {$days} days." );
 	}
 
@@ -370,7 +375,7 @@ class WPSync_CLI {
 			foreach ( $r['conflicts'] as $c ) {
 				WP_CLI::log( '  ' . $c['label'] . ' – ' . $c['reason'] );
 			}
-			WP_CLI::log( '  Resolve with: wp sync conflicts' );
+			WP_CLI::log( '  Resolve with: wp livepull conflicts' );
 		}
 		foreach ( array( 'skipped' => '%Y', 'errors' => '%R' ) as $k => $colour ) {
 			if ( $r[ $k ] ) {

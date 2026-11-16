@@ -1,14 +1,19 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
-/**
- * Read-only endpoints on live, protected by the shared WPSYNC_SECRET.
- *
- * Called via ?rest_route=/wpsync/v1/... so they work with any permalink setting.
- */
-final class WPSync_Rest {
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
 
-	const NS = 'wpsync/v1';
+/**
+ * Read-only endpoints on live, protected by the shared LIVEPULL_SECRET.
+ *
+ * Called via ?rest_route=/livepull/v1/... so they work with any permalink setting.
+ */
+final class LivePull_Rest {
+
+	const NS = 'livepull/v1';
 
 	public static function init() {
 		add_action( 'rest_api_init', array( __CLASS__, 'routes' ) );
@@ -19,17 +24,17 @@ final class WPSync_Rest {
 	}
 
 	private static function is_ours() {
-		$uri   = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '';
+		$uri   = isset( $_SERVER['REQUEST_URI'] ) ? esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
 		$route = isset( $_GET['rest_route'] ) ? (string) wp_unslash( $_GET['rest_route'] ) : ''; // phpcs:ignore
-		return false !== strpos( $uri, '/wpsync/v1/' ) || 0 === strpos( $route, '/wpsync/v1/' );
+		return false !== strpos( $uri, '/livepull/v1/' ) || 0 === strpos( $route, '/livepull/v1/' );
 	}
 
 	public static function allow_keyed( $result ) {
 		if ( ! is_wp_error( $result ) || ! self::is_ours() ) {
 			return $result;
 		}
-		$secret = WPSync_Config::secret();
-		$given  = isset( $_SERVER['HTTP_X_WPSYNC_KEY'] ) ? (string) wp_unslash( $_SERVER['HTTP_X_WPSYNC_KEY'] ) : '';
+		$secret = LivePull_Config::secret();
+		$given  = isset( $_SERVER['HTTP_X_LIVEPULL_KEY'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_LIVEPULL_KEY'] ) ) : '';
 		return ( strlen( $secret ) >= 32 && '' !== $given && hash_equals( $secret, $given ) ) ? true : $result;
 	}
 
@@ -74,15 +79,15 @@ final class WPSync_Rest {
 
 		$full = function ( $cb ) {
 			return function ( WP_REST_Request $r ) use ( $cb ) {
-				if ( ! WPSync_Full::allowed() ) {
-					return new WP_Error( 'wpsync_full_off', 'Full copies are switched off on this site.', array( 'status' => 403 ) );
+				if ( ! LivePull_Full::allowed() ) {
+					return new WP_Error( 'livepull_full_off', 'Full copies are switched off on this site.', array( 'status' => 403 ) );
 				}
 				return call_user_func( $cb, $r );
 			};
 		};
-		register_rest_route( self::NS, '/db-tables', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_tables' ) ), 'permission_callback' => $auth ) );
-		register_rest_route( self::NS, '/db-rows', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_rows' ) ), 'permission_callback' => $auth ) );
-		register_rest_route( self::NS, '/files', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_files' ) ), 'permission_callback' => $auth ) );
+		register_rest_route( self::NS, '/db-tables', array( 'methods' => 'GET', 'callback' => $full( array( 'LivePull_Full', 'rest_tables' ) ), 'permission_callback' => $auth ) );
+		register_rest_route( self::NS, '/db-rows', array( 'methods' => 'GET', 'callback' => $full( array( 'LivePull_Full', 'rest_rows' ) ), 'permission_callback' => $auth ) );
+		register_rest_route( self::NS, '/files', array( 'methods' => 'GET', 'callback' => $full( array( 'LivePull_Full', 'rest_files' ) ), 'permission_callback' => $auth ) );
 
 		register_rest_route( self::NS, '/object', array(
 			'methods'             => 'GET',
@@ -96,15 +101,15 @@ final class WPSync_Rest {
 	}
 
 	public static function authorise( WP_REST_Request $request ) {
-		$secret = WPSync_Config::secret();
+		$secret = LivePull_Config::secret();
 		if ( strlen( $secret ) < 32 ) {
-			return new WP_Error( 'wpsync_not_configured', 'WPSYNC_SECRET is missing or shorter than 32 characters on this site.', array( 'status' => 503 ) );
+			return new WP_Error( 'livepull_not_configured', 'LIVEPULL_SECRET is missing or shorter than 32 characters on this site.', array( 'status' => 503 ) );
 		}
-		$given = (string) $request->get_header( 'x-wpsync-key' );
+		$given = (string) $request->get_header( 'x-livepull-key' );
 		if ( '' === $given || ! hash_equals( $secret, $given ) ) {
-			return new WP_Error( 'wpsync_forbidden', 'Invalid sync key.', array( 'status' => 403 ) );
+			return new WP_Error( 'livepull_forbidden', 'Invalid sync key.', array( 'status' => 403 ) );
 		}
-		WPSync_Config::maybe_install();
+		LivePull_Config::maybe_install();
 		return true;
 	}
 
@@ -115,19 +120,19 @@ final class WPSync_Rest {
 	public static function status() {
 		global $wpdb;
 		$uploads = wp_get_upload_dir();
-		WPSync_Ids::maybe_backfill();
+		LivePull_Ids::maybe_backfill();
 		return array(
-			'version'        => WPSync_Config::VERSION,
-			'site_key'       => WPSync_Config::site_key(),
+			'version'        => LivePull_Config::VERSION,
+			'site_key'       => LivePull_Config::site_key(),
 			'home'           => home_url(),
 			'siteurl'        => site_url(),
 			'upload_baseurl' => $uploads['baseurl'],
-			'last_id'        => (int) $wpdb->get_var( 'SELECT MAX(id) FROM ' . WPSync_Config::table() ),
-			'min_id'         => (int) $wpdb->get_var( 'SELECT MIN(id) FROM ' . WPSync_Config::table() ),
-			'recording_since' => (string) get_option( 'wpsync_installed', '' ),
-			'full_copy'       => WPSync_Full::allowed(),
+			'last_id'        => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT MAX(id) FROM %i', LivePull_Config::table() ) ),
+			'min_id'         => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT MIN(id) FROM %i', LivePull_Config::table() ) ),
+			'recording_since' => (string) get_option( 'livepull_installed', '' ),
+			'full_copy'       => LivePull_Full::allowed(),
 			'wp_version'      => get_bloginfo( 'version' ),
-			'abspath'         => WPSync_Full::allowed() ? ABSPATH : '',
+			'abspath'         => LivePull_Full::allowed() ? ABSPATH : '',
 		);
 	}
 
@@ -138,9 +143,10 @@ final class WPSync_Rest {
 		$limit = self::limit( $r );
 		$rows  = $wpdb->get_results(
 			$wpdb->prepare(
-				'SELECT id, object_type, sync_id, object_id, action FROM ' . WPSync_Config::table() . "
+				"SELECT id, object_type, sync_id, object_id, action FROM %i
 				 WHERE id > %d AND source = 'local' AND action IN ('upsert','delete')
 				 ORDER BY id ASC LIMIT %d",
+				LivePull_Config::table(),
 				$after,
 				$limit + 1
 			)
@@ -169,8 +175,8 @@ final class WPSync_Rest {
 	/** sync ID => option name, for every pulled option on this site. */
 	private static function option_map() {
 		$map = array();
-		foreach ( WPSync_Config::pulled_option_names() as $n ) {
-			$map[ WPSync_Config::option_sid( $n ) ] = $n;
+		foreach ( LivePull_Config::pulled_option_names() as $n ) {
+			$map[ LivePull_Config::option_sid( $n ) ] = $n;
 		}
 		return $map;
 	}
@@ -179,36 +185,36 @@ final class WPSync_Rest {
 		if ( 'option' === $row->object_type ) {
 			$map = self::option_map();
 			if ( isset( $map[ $row->sync_id ] ) ) {
-				return WPSync_Exporter::option( $map[ $row->sync_id ] );
+				return LivePull_Exporter::option( $map[ $row->sync_id ] );
 			}
-			return 'delete' === $row->action ? WPSync_Exporter::tombstone( 'option', $row->sync_id ) : null;
+			return 'delete' === $row->action ? LivePull_Exporter::tombstone( 'option', $row->sync_id ) : null;
 		}
 		if ( 'delete' === $row->action ) {
 			// Only a tombstone if it really is gone (it may have been restored since).
-			$map = WPSync_Ids::map( $row->object_type );
+			$map = LivePull_Ids::map( $row->object_type );
 			if ( isset( $map[ $row->sync_id ] ) ) {
 				$row->action = 'upsert';
 				$row->object_id = $map[ $row->sync_id ];
 			} else {
-				return WPSync_Exporter::tombstone( $row->object_type, $row->sync_id );
+				return LivePull_Exporter::tombstone( $row->object_type, $row->sync_id );
 			}
 		}
 		// Look the object up by sync ID in case its row ID is stale. If it no longer exists,
 		// it was deleted (whatever the log says last), so send a deletion.
 		$id = (int) $row->object_id;
 		if ( 'post' === $row->object_type ) {
-			if ( WPSync_Ids::for_post( $id, false ) !== $row->sync_id ) {
-				$map = WPSync_Ids::map( 'post' );
+			if ( LivePull_Ids::for_post( $id, false ) !== $row->sync_id ) {
+				$map = LivePull_Ids::map( 'post' );
 				$id  = isset( $map[ $row->sync_id ] ) ? $map[ $row->sync_id ] : 0;
 			}
-			return ( $id && get_post( $id ) ) ? WPSync_Exporter::post( $id ) : WPSync_Exporter::tombstone( 'post', $row->sync_id );
+			return ( $id && get_post( $id ) ) ? LivePull_Exporter::post( $id ) : LivePull_Exporter::tombstone( 'post', $row->sync_id );
 		}
-		if ( WPSync_Ids::for_term( $id, false ) !== $row->sync_id ) {
-			$map = WPSync_Ids::map( 'term' );
+		if ( LivePull_Ids::for_term( $id, false ) !== $row->sync_id ) {
+			$map = LivePull_Ids::map( 'term' );
 			$id  = isset( $map[ $row->sync_id ] ) ? $map[ $row->sync_id ] : 0;
 		}
 		$term = $id ? get_term( $id ) : null;
-		return ( $term && ! is_wp_error( $term ) ) ? WPSync_Exporter::term( $id ) : WPSync_Exporter::tombstone( 'term', $row->sync_id );
+		return ( $term && ! is_wp_error( $term ) ) ? LivePull_Exporter::term( $id ) : LivePull_Exporter::tombstone( 'term', $row->sync_id );
 	}
 
 	/**
@@ -219,14 +225,15 @@ final class WPSync_Rest {
 		global $wpdb;
 		$since = preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $r['since'] ) ? strtotime( (string) $r['since'] . ' 00:00:00 UTC' ) : false;
 		if ( false === $since ) {
-			return new WP_Error( 'wpsync_bad_date', 'Use YYYY-MM-DD for since.', array( 'status' => 400 ) );
+			return new WP_Error( 'livepull_bad_date', 'Use YYYY-MM-DD for since.', array( 'status' => 400 ) );
 		}
 		$after = max( 0, (int) $r['after'] );
 		$limit = self::limit( $r );
 		$types = get_post_types();
-		$types = array_values( array_filter( $types, array( 'WPSync_Config', 'post_type_ok' ) ) );
+		$types = array_values( array_filter( $types, array( 'LivePull_Config', 'post_type_ok' ) ) );
 		$in    = implode( ',', array_fill( 0, count( $types ), '%s' ) );
 
+		// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in is one %s placeholder per post type.
 		$ids = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT ID FROM {$wpdb->posts}
@@ -235,22 +242,23 @@ final class WPSync_Rest {
 				array_merge( array( $after, gmdate( 'Y-m-d H:i:s', $since ) ), $types, array( $limit + 1 ) )
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$has_more = count( $ids ) > $limit;
 		$ids      = array_slice( $ids, 0, $limit );
 
 		$items = array();
 		if ( 0 === $after ) {
-			foreach ( WPSync_Config::pulled_option_names() as $n ) {
-				$item = WPSync_Exporter::option( $n );
+			foreach ( LivePull_Config::pulled_option_names() as $n ) {
+				$item = LivePull_Exporter::option( $n );
 				if ( $item && empty( $item['deleted'] ) ) {
 					$items[] = $item;
 				}
 			}
-			$taxes = array_values( array_filter( get_taxonomies(), array( 'WPSync_Config', 'taxonomy_ok' ) ) );
+			$taxes = array_values( array_filter( get_taxonomies(), array( 'LivePull_Config', 'taxonomy_ok' ) ) );
 			$terms = get_terms( array( 'taxonomy' => $taxes, 'hide_empty' => false, 'fields' => 'ids' ) );
 			if ( ! is_wp_error( $terms ) ) {
 				foreach ( $terms as $tid ) {
-					$item = WPSync_Exporter::term( $tid );
+					$item = LivePull_Exporter::term( $tid );
 					if ( $item ) {
 						$items[] = $item;
 					}
@@ -258,7 +266,7 @@ final class WPSync_Rest {
 			}
 		}
 		foreach ( $ids as $id ) {
-			$item = WPSync_Exporter::post( $id );
+			$item = LivePull_Exporter::post( $id );
 			if ( $item ) {
 				$items[] = $item;
 			}
@@ -274,17 +282,17 @@ final class WPSync_Rest {
 		$type = $r['type'];
 		if ( 'option' === $type ) {
 			$map  = self::option_map();
-			$item = isset( $map[ (string) $r['id'] ] ) ? WPSync_Exporter::option( $map[ (string) $r['id'] ] ) : null;
-			return $item ? $item : new WP_Error( 'wpsync_not_found', 'Not found.', array( 'status' => 404 ) );
+			$item = isset( $map[ (string) $r['id'] ] ) ? LivePull_Exporter::option( $map[ (string) $r['id'] ] ) : null;
+			return $item ? $item : new WP_Error( 'livepull_not_found', 'Not found.', array( 'status' => 404 ) );
 		}
-		$map  = WPSync_Ids::map( $type );
+		$map  = LivePull_Ids::map( $type );
 		$sid  = (string) $r['id'];
 		if ( ! isset( $map[ $sid ] ) ) {
-			return new WP_Error( 'wpsync_not_found', 'Not found.', array( 'status' => 404 ) );
+			return new WP_Error( 'livepull_not_found', 'Not found.', array( 'status' => 404 ) );
 		}
-		$item = 'post' === $type ? WPSync_Exporter::post( $map[ $sid ] ) : WPSync_Exporter::term( $map[ $sid ] );
+		$item = 'post' === $type ? LivePull_Exporter::post( $map[ $sid ] ) : LivePull_Exporter::term( $map[ $sid ] );
 		if ( ! $item ) {
-			return new WP_Error( 'wpsync_excluded', 'This object type is not synced.', array( 'status' => 404 ) );
+			return new WP_Error( 'livepull_excluded', 'This object type is not synced.', array( 'status' => 404 ) );
 		}
 		return $item;
 	}

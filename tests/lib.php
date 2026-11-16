@@ -4,10 +4,10 @@
  * Phases: create (live) → verify (local) → local_change (local) → change (live)
  *         → verify_change (local) → verify_full (local, after a full copy).
  */
-if ( defined( 'WPSYNC_TEST_LIB' ) ) {
+if ( defined( 'LIVEPULL_TEST_LIB' ) ) {
 	return;
 }
-define( 'WPSYNC_TEST_LIB', 1 );
+define( 'LIVEPULL_TEST_LIB', 1 );
 
 const T_LIVE  = 'localhost:8101';
 const T_LOCAL = 'localhost:8102';
@@ -24,22 +24,22 @@ function t_eq( $got, $want, $msg ) {
 }
 
 function t_save( $name, array $data ) {
-	file_put_contents( getenv( 'WPSYNC_TEST_STATE' ) . "/{$name}.json", wp_json_encode( $data ) );
+	file_put_contents( getenv( 'LIVEPULL_TEST_STATE' ) . "/{$name}.json", wp_json_encode( $data ) );
 }
 
 function t_load( $name ) {
-	$f = getenv( 'WPSYNC_TEST_STATE' ) . "/{$name}.json";
+	$f = getenv( 'LIVEPULL_TEST_STATE' ) . "/{$name}.json";
 	return file_exists( $f ) ? json_decode( file_get_contents( $f ), true ) : array();
 }
 
 /** Sync ID of a live object (call on live). */
 function t_sid( $id, $type = 'post' ) {
-	return 'post' === $type ? WPSync_Ids::for_post( $id ) : WPSync_Ids::for_term( $id );
+	return 'post' === $type ? LivePull_Ids::for_post( $id ) : LivePull_Ids::for_term( $id );
 }
 
 /** Local ID for a live sync ID (call on local). */
 function t_local( $sid, $type = 'post' ) {
-	$m = WPSync_Ids::map( $type );
+	$m = LivePull_Ids::map( $type );
 	return isset( $m[ $sid ] ) ? (int) $m[ $sid ] : 0;
 }
 

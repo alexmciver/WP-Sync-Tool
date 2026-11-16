@@ -13,10 +13,10 @@ labels: bug
 2.
 
 **Versions**
-- WP Sync (live / local):
+- LivePull (live / local):
 - WordPress (live / local):
 - PHP (live / local):
 
 **Environment** (hosting, local tool such as Local/DDEV, page builder, notable plugins):
 
-**Messages or screenshots** (error text from Tools → WP Sync helps a lot):
+**Messages or screenshots** (error text from Tools → LivePull helps a lot):

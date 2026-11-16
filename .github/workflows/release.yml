@@ -1,8 +1,10 @@
 name: Release
 
-# When the "Version:" in wp-sync.php changes on main, build wp-sync.zip and publish
-# a GitHub Release. Sites running WP Sync see it as a normal plugin update and
-# install it automatically.
+# When the version in livepull.php changes on main:
+#   1. Build livepull.zip (GitHub download, updates itself from GitHub releases) and
+#      livepull-wordpress-org.zip (WordPress.org version), and publish a GitHub Release.
+#   2. If WordPress.org SVN credentials are set (repository secrets SVN_USERNAME and
+#      SVN_PASSWORD), also publish the new version to the WordPress.org plugin directory.
 
 on:
   push:
@@ -21,10 +23,11 @@ jobs:
       - name: Read version
         id: v
         run: |
-          VERSION=$(grep -m1 -E '^\s*\*\s*Version:' wp-sync.php | sed -E 's/.*Version:\s*//' | tr -d '[:space:]')
-          CONST=$(grep -m1 "const VERSION" wp-sync/includes/class-config.php | sed -E "s/.*'([^']+)'.*/\1/")
-          if [ "$VERSION" != "$CONST" ]; then
-            echo "::error::Version mismatch: wp-sync.php says $VERSION, class-config.php says $CONST"
+          VERSION=$(grep -m1 -E '^\s*\*\s*Version:' livepull.php | sed -E 's/.*Version:\s*//' | tr -d '[:space:]')
+          CONST=$(grep -m1 "const VERSION" includes/class-config.php | sed -E "s/.*'([^']+)'.*/\1/")
+          STABLE=$(grep -m1 -i '^Stable tag:' readme.txt | sed -E 's/^[^:]+:\s*//' | tr -d '[:space:]')
+          if [ "$VERSION" != "$CONST" ] || [ "$VERSION" != "$STABLE" ]; then
+            echo "::error::Version mismatch: livepull.php $VERSION, class-config.php $CONST, readme.txt Stable tag $STABLE"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -38,19 +41,11 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Lint PHP
+      - name: Build
         if: steps.exists.outputs.skip != 'true'
-        run: |
-          for f in wp-sync.php uninstall.php wp-sync/includes/*.php; do php -l "$f"; done
+        run: bin/build.sh
 
-      - name: Build wp-sync.zip
-        if: steps.exists.outputs.skip != 'true'
-        run: |
-          mkdir -p build/wp-sync
-          cp -r wp-sync.php wp-sync uninstall.php README.md LICENSE CHANGELOG.md build/wp-sync/
-          cd build && zip -qr wp-sync.zip wp-sync
-
-      - name: Publish release
+      - name: Publish GitHub release
         if: steps.exists.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,6 +53,28 @@ jobs:
           # Release notes: this version's CHANGELOG section, else the commit message.
           awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > notes.txt
           [ -s notes.txt ] || git log -1 --format=%B > notes.txt
-          gh release create "v${{ steps.v.outputs.version }}" build/wp-sync.zip \
-            --title "WP Sync ${{ steps.v.outputs.version }}" \
+          gh release create "v${{ steps.v.outputs.version }}" dist/livepull.zip dist/livepull-wordpress-org.zip dist/wp-sync.zip \
+            --title "LivePull ${{ steps.v.outputs.version }}" \
             --notes-file notes.txt
+
+      - name: Check for WordPress.org credentials
+        id: svn
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+        run: '[ -n "$SVN_USERNAME" ] && echo "ok=true" >> "$GITHUB_OUTPUT" || echo "No SVN credentials yet: skipping WordPress.org."'
+
+      - name: Unpack the WordPress.org build
+        if: steps.svn.outputs.ok == 'true'
+        run: mkdir -p build && unzip -q dist/livepull-wordpress-org.zip -d build
+
+      - name: Publish to WordPress.org
+        if: steps.svn.outputs.ok == 'true'
+        uses: 10up/action-wordpress-plugin-deploy@stable
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          SLUG: livepull
+          VERSION: ${{ steps.v.outputs.version }}
+          BUILD_DIR: build/livepull
+          ASSETS_DIR: .wordpress-org

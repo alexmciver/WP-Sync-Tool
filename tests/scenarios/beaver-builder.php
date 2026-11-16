@@ -1,6 +1,6 @@
 <?php
 // Beaver Builder: _fl_builder_data / _fl_builder_draft (serialized stdClass nodes) with photo modules.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 if ( ! t_needs( 'beaver-builder-lite-version/fl-builder.php', 'Beaver Builder' ) ) {
 	return;

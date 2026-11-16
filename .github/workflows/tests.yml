@@ -1,0 +1,74 @@
+name: Tests
+
+# On every push and pull request:
+#   1. WordPress.org's Plugin Check on the directory build (must pass with no errors).
+#   2. The end-to-end suite (tests/run.sh) on every supported PHP version, with real
+#      WordPress, MySQL and the page builders / plugins from WordPress.org.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: wp-cli
+      - name: Build the WordPress.org version
+        run: |
+          bin/build.sh
+          mkdir -p build && unzip -q dist/livepull-wordpress-org.zip -d build
+      - uses: WordPress/plugin-check-action@v1
+        with:
+          build-dir: build/livepull
+
+  e2e:
+    name: End-to-end (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4']
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -proot" --health-interval=5s --health-timeout=3s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, zip, gd, intl, mbstring
+          ini-values: memory_limit=512M
+          tools: wp-cli
+      - name: Download plugins from WordPress.org
+        run: |
+          mkdir -p /tmp/plugins
+          for p in advanced-custom-fields beaver-builder-lite-version contact-form-7 elementor generateblocks \
+                   kadence-blocks polylang siteorigin-panels so-widgets-bundle ultimate-addons-for-gutenberg \
+                   woocommerce wordpress-seo; do
+            curl -sSfL -o "/tmp/plugins/$p.zip" "https://downloads.wordpress.org/plugin/$p.latest-stable.zip"
+          done
+      - name: Run tests
+        env:
+          DB_USER: root
+          DB_PASS: root
+          DB_HOST: 127.0.0.1
+          LIVEPULL_TEST_PLUGINS: /tmp/plugins
+        run: tests/run.sh
+      - name: Server logs
+        if: failure()
+        run: tail -n 100 /tmp/livepull-test/*.log || true

@@ -1,12 +1,17 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Search-replace inside values that may be PHP-serialized (any depth, including serialized
  * strings inside serialized data), recalculating string lengths so nothing gets corrupted.
  * Never unserializes, so no plugin classes are needed and nothing is executed.
  */
-final class WPSync_Serial {
+final class LivePull_Serial {
 
 	public static function replace( $value, array $from, array $to ) {
 		if ( ! is_string( $value ) || '' === $value || ! $from ) {
@@ -94,32 +99,32 @@ final class WPSync_Serial {
  * "Copy everything from live": a full copy of live's database and uploads into this site.
  *
  * Live side: read-only endpoints listing tables, rows and upload files (key-protected,
- * can be switched off on live's WP Sync screen).
+ * can be switched off on live's LivePull screen).
  *
  * Local side: a resumable, time-budgeted job.
  *   1. Back up this whole database.
  *   2. Load every live table into temporary tables (URLs, paths and table prefix rewritten).
  *   3. Download missing/changed files from live's uploads folder.
- *   4. Swap the temporary tables in at once, then restore this site's URL, its WP Sync
+ *   4. Swap the temporary tables in at once, then restore this site's URL, its LivePull
  *      connection and "discourage search engines", and mark the database as a fresh copy.
  * Nothing on this site changes until step 4, so stopping part-way is harmless.
  */
-final class WPSync_Full {
+final class LivePull_Full {
 
-	const TMP = 'wpsynctmp_';
-	const OLD = 'wpsyncold_';
+	const TMP = 'lpulltmp_';
+	const OLD = 'lpullold_';
 
 	/* ============================================================== Live side */
 
 	/**
 	 * Full copies hand over the whole database (users, settings, API keys in plugin settings),
-	 * so they're off unless switched on – for an hour, or always – on live's WP Sync screen.
+	 * so they're off unless switched on – for an hour, or always – on live's LivePull screen.
 	 */
 	public static function allowed() {
-		if ( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
-			return (bool) WPSYNC_ALLOW_FULL_COPY;
+		if ( defined( 'LIVEPULL_ALLOW_FULL_COPY' ) ) {
+			return (bool) LIVEPULL_ALLOW_FULL_COPY;
 		}
-		$v = get_option( 'wpsync_allow_full_copy', 'no' );
+		$v = get_option( 'livepull_allow_full_copy', 'no' );
 		if ( 'always' === $v || 'yes' === $v ) {
 			return true;
 		}
@@ -128,10 +133,10 @@ final class WPSync_Full {
 
 	/** 'off' | 'always' | seconds left. */
 	public static function permission() {
-		if ( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
-			return WPSYNC_ALLOW_FULL_COPY ? 'always' : 'off';
+		if ( defined( 'LIVEPULL_ALLOW_FULL_COPY' ) ) {
+			return LIVEPULL_ALLOW_FULL_COPY ? 'always' : 'off';
 		}
-		$v = get_option( 'wpsync_allow_full_copy', 'no' );
+		$v = get_option( 'livepull_allow_full_copy', 'no' );
 		if ( 'always' === $v || 'yes' === $v ) {
 			return 'always';
 		}
@@ -140,7 +145,7 @@ final class WPSync_Full {
 
 	/** Table names (without prefix) that are never worth copying (logs, sessions, caches). */
 	private static function skipped_tables() {
-		return apply_filters( 'wpsync_full_copy_skip_tables', array(
+		return apply_filters( 'livepull_full_copy_skip_tables', array(
 			'woocommerce_sessions', 'actionscheduler_logs', 'redirection_404', 'redirection_logs',
 			'wfhits', 'wflogins', 'wflivetraffichuman', 'wfblockediplog', 'wfcrawlers', 'wffilechanges', 'wfnotifications',
 			'wfstatus', 'wftrafficrates', 'wfknownfilelist', 'wffilemods', 'wfsnipcache', 'wfreversecache',
@@ -162,11 +167,11 @@ final class WPSync_Full {
 			if ( is_multisite() && preg_match( '/^\d+_/', $name ) ) {
 				continue;
 			}
-			$create = $wpdb->get_row( "SHOW CREATE TABLE `{$full}`", ARRAY_N );
+			$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $full ), ARRAY_N );
 			if ( ! $create || false === stripos( $create[1], 'CREATE TABLE' ) ) {
 				continue; // Views etc.
 			}
-			$keys = $wpdb->get_results( "SHOW KEYS FROM `{$full}` WHERE Key_name = 'PRIMARY'" );
+			$keys = $wpdb->get_results( $wpdb->prepare( "SHOW KEYS FROM %i WHERE Key_name = 'PRIMARY'", $full ) );
 			$pk   = array();
 			foreach ( $keys as $k ) {
 				$pk[ (int) $k->Seq_in_index ] = $k->Column_name;
@@ -175,7 +180,7 @@ final class WPSync_Full {
 			$out[] = array(
 				'name'   => $name,
 				'create' => $create[1],
-				'rows'   => (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$full}`" ),
+				'rows'   => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $full ) ),
 				'pk'     => array_values( $pk ),
 			);
 		}
@@ -192,18 +197,18 @@ final class WPSync_Full {
 		$full  = $wpdb->prefix . $name;
 		$limit = max( 1, min( 2000, (int) $r['limit'] ) );
 		if ( '' === $name || $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $full ) ) ) !== $full ) {
-			return new WP_Error( 'wpsync_no_table', 'Unknown table.', array( 'status' => 404 ) );
+			return new WP_Error( 'livepull_no_table', 'Unknown table.', array( 'status' => 404 ) );
 		}
 		$pk     = (string) $r['pk'];
 		$cursor = (string) $r['cursor'];
 		$keyset = '' !== $pk && preg_match( '/^[A-Za-z0-9_]+$/', $pk );
 		if ( $keyset ) {
 			$rows = $wpdb->get_results(
-				$wpdb->prepare( "SELECT * FROM `{$full}` WHERE `{$pk}` > %s ORDER BY `{$pk}` ASC LIMIT %d", '' === $cursor ? '-1' : $cursor, $limit ),
+				$wpdb->prepare( 'SELECT * FROM %i WHERE %i > %s ORDER BY %i ASC LIMIT %d', $full, $pk, '' === $cursor ? '-1' : $cursor, $pk, $limit ),
 				ARRAY_A
 			);
 		} else {
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `{$full}` LIMIT %d, %d", (int) $cursor, $limit ), ARRAY_A );
+			$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, %d', $full, (int) $cursor, $limit ), ARRAY_A );
 		}
 		$out      = array();
 		$bytes    = 0;
@@ -241,7 +246,7 @@ final class WPSync_Full {
 
 	/** Folders inside uploads that are caches or backups, not content. */
 	private static function skipped_dirs() {
-		return apply_filters( 'wpsync_full_copy_skip_dirs', array( 'et-cache', 'cache', 'elementor/css', 'wpsync-backups', 'backup', 'backups', 'ai1wm-backups', 'updraft', 'wp-staging', 'bb-plugin/cache', 'wc-logs', 'wpforms/cache', 'litespeed', 'sucuri', 'wflogs' ) );
+		return apply_filters( 'livepull_full_copy_skip_dirs', array( 'et-cache', 'cache', 'elementor/css', 'livepull-backups', 'backup', 'backups', 'ai1wm-backups', 'updraft', 'wp-staging', 'bb-plugin/cache', 'wc-logs', 'wpforms/cache', 'litespeed', 'sucuri', 'wflogs' ) );
 	}
 
 	public static function rest_files( WP_REST_Request $r ) {
@@ -285,10 +290,10 @@ final class WPSync_Full {
 
 	/* ============================================================= Local side */
 
-	const STATE = 'wpsync_full_state';
+	const STATE = 'livepull_full_state';
 
 	private static function client() {
-		return WPSync_Puller::client();
+		return LivePull_Puller::client();
 	}
 
 	/** @return array|WP_Error state */
@@ -296,27 +301,27 @@ final class WPSync_Full {
 		global $wpdb;
 		$opts    = wp_parse_args( $opts, array( 'files' => true, 'backup' => true ) );
 		$notices = array();
-		$remote  = WPSync_Puller::connect( $notices, true );
+		$remote  = LivePull_Puller::connect( $notices, true );
 		if ( is_wp_error( $remote ) ) {
 			return $remote;
 		}
 		if ( empty( $remote['full_copy'] ) ) {
-			return new WP_Error( 'wpsync_full_off', 'Copy everything is switched off on the live site (it shares the whole database, so it\'s off by default). On live, open Tools → WP Sync → "Let other sites pull from this one" and click "Allow for 1 hour", then try again here.' );
+			return new WP_Error( 'livepull_full_off', 'Copy everything is switched off on the live site (it shares the whole database, so it\'s off by default). On live, open Tools → LivePull → "Let other sites pull from this one" and click "Allow for 1 hour", then try again here.' );
 		}
-		if ( get_transient( WPSync_Puller::LOCK ) ) {
-			return new WP_Error( 'wpsync_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
+		if ( get_transient( LivePull_Puller::LOCK ) ) {
+			return new WP_Error( 'livepull_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
 		}
 		$list = self::client()->get( 'db-tables' );
 		if ( is_wp_error( $list ) ) {
 			return $list;
 		}
-		set_transient( WPSync_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
+		set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		self::clear_cancel();
 		self::drop_temp_tables();
 
 		// Settings that belong to THIS site and must survive the copy.
 		$keep = array();
-		foreach ( array( 'siteurl', 'home', 'blog_public', 'wpsync_remote', 'wpsync_remote_secret', 'wpsync_secret', 'wpsync_remote_url_style' ) as $o ) {
+		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style' ) as $o ) {
 			$v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $o ) );
 			if ( null !== $v ) {
 				$keep[ $o ] = $v;
@@ -400,28 +405,28 @@ final class WPSync_Full {
 			if ( self::cancelled() ) {
 				self::clear_cancel();
 				self::abort();
-				return new WP_Error( 'wpsync_cancelled', 'Cancelled. Nothing on this site was changed.' );
+				return new WP_Error( 'livepull_cancelled', 'Cancelled. Nothing on this site was changed.' );
 			}
 			if ( 'backup' === $state['phase'] ) {
 				if ( defined( 'WP_CLI' ) && WP_CLI ) {
 					$state['activity'] = 'Backing up this site\'s whole database…';
-					$file              = WPSync_Backup::create( true );
+					$file              = LivePull_Backup::create( true );
 					if ( is_wp_error( $file ) ) {
 						self::abort();
-						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+						return new WP_Error( 'livepull_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
 					}
 					$state['backup_file'] = $file;
 					$state['phase']       = 'tables';
 				} else {
 					// In the browser: a few thousand rows per request, so big databases can't time out.
 					if ( empty( $state['bk'] ) ) {
-						$state['bk'] = WPSync_Backup::chunk_start( true );
+						$state['bk'] = LivePull_Backup::chunk_start( true );
 					}
 					$state['activity'] = sprintf( 'Backing up this site\'s database (table %d of %d)…', min( $state['bk']['ti'] + 1, count( $state['bk']['tables'] ) ), count( $state['bk']['tables'] ) );
-					$r = WPSync_Backup::chunk_step( $state['bk'], $out );
+					$r = LivePull_Backup::chunk_step( $state['bk'], $out );
 					if ( is_wp_error( $r ) ) {
 						self::abort();
-						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $r->get_error_message() );
+						return new WP_Error( 'livepull_backup', 'Backup failed, so nothing was changed: ' . $r->get_error_message() );
 					}
 					if ( true === $r ) {
 						$state['backup_file'] = $state['bk']['file'];
@@ -463,7 +468,7 @@ final class WPSync_Full {
 			}
 		}
 		if ( ! $state['done'] ) {
-			set_transient( WPSync_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
+			set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		}
 		return $state;
 	}
@@ -471,25 +476,25 @@ final class WPSync_Full {
 	/** Ask a running copy to stop (it checks between tables and right before switching over). */
 	public static function request_cancel() {
 		global $wpdb;
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'wpsync_full_cancel' ) );
-		$wpdb->insert( $wpdb->options, array( 'option_name' => 'wpsync_full_cancel', 'option_value' => (string) time(), 'autoload' => 'no' ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'livepull_full_cancel' ) );
+		$wpdb->insert( $wpdb->options, array( 'option_name' => 'livepull_full_cancel', 'option_value' => (string) time(), 'autoload' => 'no' ) );
 	}
 
 	/** Read straight from the database: the flag is set by a different request. */
 	private static function cancelled() {
 		global $wpdb;
-		return (bool) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'wpsync_full_cancel' ) );
+		return (bool) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'livepull_full_cancel' ) );
 	}
 
 	private static function clear_cancel() {
 		global $wpdb;
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'wpsync_full_cancel' ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'livepull_full_cancel' ) );
 	}
 
 	/** Stop: drop temporary tables. This site is unchanged. */
 	public static function abort() {
 		self::drop_temp_tables();
-		delete_transient( WPSync_Puller::LOCK );
+		delete_transient( LivePull_Puller::LOCK );
 	}
 
 	private static function tmp_name( $name ) {
@@ -501,7 +506,7 @@ final class WPSync_Full {
 		global $wpdb;
 		foreach ( array( self::TMP, self::OLD ) as $mark ) {
 			foreach ( (array) $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $wpdb->prefix . $mark ) . '%' ) ) as $t ) {
-				$wpdb->query( "DROP TABLE IF EXISTS `{$t}`" );
+				$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $t ) );
 			}
 		}
 	}
@@ -521,13 +526,14 @@ final class WPSync_Full {
 		if ( ! $state['created'] ) {
 			$sql = preg_replace( '/^CREATE TABLE `[^`]+`/i', 'CREATE TABLE `' . $tmp . '`', $t['create'], 1 );
 			$sql = preg_replace( '/\sAUTO_INCREMENT=\d+/i', '', $sql );
-			$wpdb->query( "DROP TABLE IF EXISTS `{$tmp}`" );
-			if ( false === $wpdb->query( $sql ) ) {
+			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $tmp ) );
+			// $sql is live's own CREATE TABLE statement (from SHOW CREATE TABLE) with the name swapped for our temporary table.
+			if ( false === $wpdb->query( $sql ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 				// e.g. MySQL 8 collations on MariaDB: fall back to a universally available one.
 				$sql2 = preg_replace( '/utf8mb4_0900_[a-z_]+/i', 'utf8mb4_unicode_ci', $sql );
 				$sql2 = preg_replace( '/utf8mb4_uca1400_[a-z_]+/i', 'utf8mb4_unicode_ci', $sql2 );
-				if ( false === $wpdb->query( $sql2 ) ) {
-					return new WP_Error( 'wpsync_create', 'Could not create a copy of table ' . $t['name'] . ': ' . $wpdb->last_error );
+				if ( false === $wpdb->query( $sql2 ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+					return new WP_Error( 'livepull_create', 'Could not create a copy of table ' . $t['name'] . ': ' . $wpdb->last_error );
 				}
 			}
 			$state['created'] = true;
@@ -543,7 +549,7 @@ final class WPSync_Full {
 			$res = self::client()->get( 'db-rows', array( 'table' => $t['name'], 'pk' => '', 'cursor' => '0', 'limit' => 1000 ) );
 		}
 		if ( is_wp_error( $res ) ) {
-			return new WP_Error( 'wpsync_rows', 'Copying ' . $t['name'] . ' failed: ' . $res->get_error_message() );
+			return new WP_Error( 'livepull_rows', 'Copying ' . $t['name'] . ' failed: ' . $res->get_error_message() );
 		}
 
 		if ( $res['rows'] ) {
@@ -573,7 +579,7 @@ final class WPSync_Full {
 			if ( null === $v ) {
 				return 'NULL';
 			}
-			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'";
+			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string -- multi-row INSERT of copied rows; every value is escaped here.
 		};
 		$cols   = array_keys( $rows[0] );
 		$head   = 'INSERT INTO `' . $tmp . '` (`' . implode( '`,`', $cols ) . '`) VALUES ';
@@ -585,7 +591,7 @@ final class WPSync_Full {
 				if ( is_array( $v ) && isset( $v['b64'] ) ) {
 					$v = base64_decode( $v['b64'] ); // phpcs:ignore
 				} elseif ( is_string( $v ) ) {
-					$v = WPSync_Serial::replace( $v, $from, $to );
+					$v = LivePull_Serial::replace( $v, $from, $to );
 				}
 				// Table prefix lives inside some keys: wp_user_roles, wp_capabilities, wp_user_level…
 				if ( $fix_prefix && is_string( $v ) && 0 === strpos( $v, $rp ) &&
@@ -599,14 +605,14 @@ final class WPSync_Full {
 			$size    += strlen( $line );
 			if ( $size > 900000 ) {
 				if ( false === $wpdb->query( $head . implode( ',', $values ) ) ) { // phpcs:ignore
-					return new WP_Error( 'wpsync_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
+					return new WP_Error( 'livepull_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
 				}
 				$values = array();
 				$size   = 0;
 			}
 		}
 		if ( $values && false === $wpdb->query( $head . implode( ',', $values ) ) ) { // phpcs:ignore
-			return new WP_Error( 'wpsync_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
+			return new WP_Error( 'livepull_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
 		}
 		return true;
 	}
@@ -616,7 +622,7 @@ final class WPSync_Full {
 		while ( ! $out() ) {
 			if ( $state['queue'] ) {
 				$f    = array_shift( $state['queue'] );
-				$dest = WPSync_Importer::safe_dest( $f['path'] );
+				$dest = LivePull_Importer::safe_dest( $f['path'] );
 				$state['files_done']++;
 				$state['activity'] = sprintf( 'Downloading uploads: %d of %d files checked', $state['files_done'], $state['files_total'] );
 				if ( ! $dest ) {
@@ -671,17 +677,17 @@ final class WPSync_Full {
 			$renames[] = "`{$tmp}` TO `{$live}`";
 		}
 		if ( ! $renames ) {
-			return new WP_Error( 'wpsync_swap', 'Nothing was copied.' );
+			return new WP_Error( 'livepull_swap', 'Nothing was copied.' );
 		}
 		if ( self::cancelled() ) {
-			return new WP_Error( 'wpsync_cancelled', 'Cancelled. Nothing on this site was changed.' );
+			return new WP_Error( 'livepull_cancelled', 'Cancelled. Nothing on this site was changed.' );
 		}
 		// One statement, so every table switches at the same instant.
-		if ( false === $wpdb->query( 'RENAME TABLE ' . implode( ', ', $renames ) ) ) {
-			return new WP_Error( 'wpsync_swap', 'Switching tables failed: ' . $wpdb->last_error . ' This site was left as it was.' );
+		if ( false === $wpdb->query( 'RENAME TABLE ' . implode( ', ', $renames ) ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table names built above from this site's own table list, each backtick-quoted.
+			return new WP_Error( 'livepull_swap', 'Switching tables failed: ' . $wpdb->last_error . ' This site was left as it was.' );
 		}
 		foreach ( $drops as $d ) {
-			$wpdb->query( "DROP TABLE IF EXISTS `{$d}`" );
+			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $d ) );
 		}
 
 		// Put back what belongs to this site.
@@ -689,16 +695,16 @@ final class WPSync_Full {
 			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", $name ) );
 			$wpdb->insert( $wpdb->options, array( 'option_name' => $name, 'option_value' => $value, 'autoload' => in_array( $name, array( 'siteurl', 'home', 'blog_public' ), true ) ? 'yes' : 'no' ) );
 		}
-		if ( ! isset( $state['keep']['wpsync_secret'] ) ) {
-			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'wpsync_secret' ) ); // Don't keep live's key here.
+		if ( ! isset( $state['keep']['livepull_secret'] ) ) {
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'livepull_secret' ) ); // Don't keep live's key here.
 		}
 		$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\\_transient\\_%' OR option_name LIKE '\\_site\\_transient\\_%'" );
 
-		// Keep WP Sync switched on if it's a normal plugin here.
-		if ( defined( 'WP_PLUGIN_DIR' ) && 0 === strpos( wp_normalize_path( WPSYNC_FILE ), wp_normalize_path( WP_PLUGIN_DIR ) ) ) {
+		// Keep LivePull switched on if it's a normal plugin here.
+		if ( defined( 'WP_PLUGIN_DIR' ) && 0 === strpos( wp_normalize_path( LIVEPULL_FILE ), wp_normalize_path( WP_PLUGIN_DIR ) ) ) {
 			$active = maybe_unserialize( $wpdb->get_var( "SELECT option_value FROM {$wpdb->options} WHERE option_name = 'active_plugins'" ) );
 			$active = is_array( $active ) ? $active : array();
-			$base   = plugin_basename( WPSYNC_FILE );
+			$base   = plugin_basename( LIVEPULL_FILE );
 			if ( ! in_array( $base, $active, true ) ) {
 				$active[] = $base;
 				$wpdb->update( $wpdb->options, array( 'option_value' => maybe_serialize( array_values( $active ) ) ), array( 'option_name' => 'active_plugins' ) );
@@ -721,14 +727,14 @@ final class WPSync_Full {
 		}
 
 		// This database is now a fresh copy of live: pulls continue from this exact point.
-		WPSync_Config::mark_as_clone();
-		delete_option( 'wpsync_clone_detected' );
-		update_option( 'wpsync_fingerprint', WPSync_Config::fingerprint(), true );
-		update_option( 'wpsync_remote_home', $state['remote']['home'], false );
-		update_option( 'wpsync_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
-		update_option( 'wpsync_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
-		update_option( 'wpsync_last_full_copy', gmdate( 'Y-m-d H:i:s' ), false );
-		delete_transient( WPSync_Puller::LOCK );
+		LivePull_Config::mark_as_clone();
+		delete_option( 'livepull_clone_detected' );
+		update_option( 'livepull_fingerprint', LivePull_Config::fingerprint(), true );
+		update_option( 'livepull_remote_home', $state['remote']['home'], false );
+		update_option( 'livepull_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
+		update_option( 'livepull_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
+		update_option( 'livepull_last_full_copy', gmdate( 'Y-m-d H:i:s' ), false );
+		delete_transient( LivePull_Puller::LOCK );
 		wp_cache_flush();
 		return true;
 	}

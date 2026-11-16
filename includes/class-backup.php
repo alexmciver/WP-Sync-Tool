@@ -1,6 +1,11 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Database backup before a pull.
  *
@@ -8,15 +13,15 @@ defined( 'ABSPATH' ) || exit;
  * gzipped SQL dump of the tables a pull can change, in PHP, so it works on any host.
  * Restore with `wp db import <file>` or phpMyAdmin.
  */
-final class WPSync_Backup {
+final class LivePull_Backup {
 
 	const KEEP = 10;
 
 	/**
 	 * Where backups live. Outside the public web folder when possible (e.g. the folder above
 	 * public_html / app/public), so they can never be downloaded even on servers that ignore
-	 * .htaccess (nginx). Otherwise wp-content/wpsync-backups with deny rules and random names.
-	 * Override with define( 'WPSYNC_BACKUP_DIR', '/absolute/path' ).
+	 * .htaccess (nginx). Otherwise wp-content/livepull-backups with deny rules and random names.
+	 * Override with define( 'LIVEPULL_BACKUP_DIR', '/absolute/path' ).
 	 */
 	public static function dir() {
 		static $dir = null;
@@ -24,27 +29,27 @@ final class WPSync_Backup {
 			return $dir;
 		}
 		$candidates = array();
-		if ( defined( 'WPSYNC_BACKUP_DIR' ) && WPSYNC_BACKUP_DIR ) {
-			$candidates[] = untrailingslashit( WPSYNC_BACKUP_DIR );
+		if ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR ) {
+			$candidates[] = untrailingslashit( LIVEPULL_BACKUP_DIR );
 		}
 		$above = dirname( untrailingslashit( ABSPATH ) );
 		if ( $above && $above !== untrailingslashit( ABSPATH ) && @is_writable( $above ) ) { // phpcs:ignore
 			// One sub-folder per site: several sites can share the folder above them.
-			$candidates[] = $above . '/wpsync-backups/' . self::site_folder();
+			$candidates[] = $above . '/livepull-backups/' . self::site_folder();
 		}
-		$candidates[] = WP_CONTENT_DIR . '/wpsync-backups';
+		$candidates[] = WP_CONTENT_DIR . '/livepull-backups';
 
 		foreach ( $candidates as $c ) {
-			if ( ( is_dir( $c ) || wp_mkdir_p( $c ) ) && is_writable( $c ) ) {
+			if ( ( is_dir( $c ) || wp_mkdir_p( $c ) ) && wp_is_writable( $c ) ) {
 				$dir = $c;
 				break;
 			}
 		}
 		if ( null === $dir ) {
-			$dir = WP_CONTENT_DIR . '/wpsync-backups';
+			$dir = WP_CONTENT_DIR . '/livepull-backups';
 		}
 		self::protect( $dir );
-		if ( basename( dirname( $dir ) ) === 'wpsync-backups' ) {
+		if ( basename( dirname( $dir ) ) === 'livepull-backups' ) {
 			self::protect( dirname( $dir ) );
 		}
 		self::migrate_old( $dir );
@@ -68,7 +73,7 @@ final class WPSync_Backup {
 
 	/** Backups made by versions before 0.5.0: move here and give them unguessable names. */
 	private static function migrate_old( $dir ) {
-		$old = WP_CONTENT_DIR . '/wpsync-backups';
+		$old = WP_CONTENT_DIR . '/livepull-backups';
 		foreach ( array_unique( array( $old, $dir ) ) as $from ) {
 			foreach ( (array) glob( $from . '/pre-pull-*' ) as $f ) {
 				if ( preg_match( '/^pre-(pull|copy)-(\d{8})-(\d{6})\.(sql(?:\.gz)?)$/', basename( $f ), $m ) ) {
@@ -121,15 +126,15 @@ final class WPSync_Backup {
 			$all = (array) $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $wpdb->prefix ) . '%' ) );
 			return array_values( array_filter( $all, function ( $t ) use ( $wpdb ) {
 				$n = substr( $t, strlen( $wpdb->prefix ) );
-				return 0 !== strpos( $n, 'wpsynctmp_' ) && 0 !== strpos( $n, 'wpsyncold_' );
+				return 0 !== strpos( $n, 'lpulltmp_' ) && 0 !== strpos( $n, 'lpullold_' );
 			} ) );
 		}
-		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->users, $wpdb->usermeta, $wpdb->options, WPSync_Config::table() );
+		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->users, $wpdb->usermeta, $wpdb->options, LivePull_Config::table() );
 		if ( function_exists( 'wc_get_attribute_taxonomies' ) ) {
 			$tables[] = $wpdb->prefix . 'woocommerce_attribute_taxonomies';
 			$tables[] = $wpdb->prefix . 'wc_product_meta_lookup';
 		}
-		return apply_filters( 'wpsync_backup_tables', $tables );
+		return apply_filters( 'livepull_backup_tables', $tables );
 	}
 
 	private static function php_dump( $file, $full = false ) {
@@ -137,7 +142,7 @@ final class WPSync_Backup {
 		$gz = '.gz' === substr( $file, -3 );
 		$fh = $gz ? gzopen( $file, 'wb6' ) : fopen( $file, 'wb' ); // phpcs:ignore
 		if ( ! $fh ) {
-			return new WP_Error( 'wpsync_backup', 'Could not write backup file in ' . dirname( $file ) );
+			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $file ) );
 		}
 		$write = function ( $s ) use ( $fh, $gz ) {
 			$gz ? gzwrite( $fh, $s ) : fwrite( $fh, $s ); // phpcs:ignore
@@ -147,21 +152,23 @@ final class WPSync_Backup {
 				return 'NULL';
 			}
 			if ( $wpdb->dbh instanceof mysqli ) {
-				return "'" . mysqli_real_escape_string( $wpdb->dbh, $v ) . "'";
+				// Backups are SQL files replayed by restore() straight to MySQL, so values need the
+				// connection's native escaping ($wpdb's escaping adds placeholders meant for $wpdb->query).
+				return "'" . mysqli_real_escape_string( $wpdb->dbh, $v ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string
 			}
 			return "'" . addslashes( $v ) . "'";
 		};
 
-		$write( "-- WP Sync backup " . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
+		$write( "-- LivePull backup " . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
 		foreach ( self::tables( $full ) as $table ) {
 			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
 				continue;
 			}
-			$create = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
+			$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $table ), ARRAY_N );
 			$write( "DROP TABLE IF EXISTS `{$table}`;\n" . $create[1] . ";\n\n" );
 			$offset = 0;
 			do {
-				$rows = $wpdb->get_results( "SELECT * FROM `{$table}` LIMIT {$offset}, 500", ARRAY_N );
+				$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 500', $table, $offset ), ARRAY_N );
 				if ( $rows ) {
 					$values = array();
 					foreach ( $rows as $row ) {
@@ -201,7 +208,7 @@ final class WPSync_Backup {
 		global $wpdb;
 		$fh = $st['gz'] ? gzopen( $st['file'], 'ab6' ) : fopen( $st['file'], 'ab' ); // phpcs:ignore
 		if ( ! $fh ) {
-			return new WP_Error( 'wpsync_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
+			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
 		}
 		$gz    = $st['gz'];
 		$write = function ( $s ) use ( $fh, $gz ) {
@@ -211,10 +218,10 @@ final class WPSync_Backup {
 			if ( null === $v ) {
 				return 'NULL';
 			}
-			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'";
+			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string -- see dump(): native escaping for SQL files.
 		};
 		if ( ! $st['begun'] ) {
-			$write( '-- WP Sync backup ' . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
+			$write( '-- LivePull backup ' . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
 			$st['begun'] = true;
 		}
 		$done = false;
@@ -226,14 +233,14 @@ final class WPSync_Backup {
 			}
 			$table = $st['tables'][ $st['ti'] ];
 			if ( 0 === $st['offset'] ) {
-				$create = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
+				$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $table ), ARRAY_N );
 				if ( ! $create ) {
 					$st['ti']++;
 					continue;
 				}
 				$write( "DROP TABLE IF EXISTS `{$table}`;\n" . $create[1] . ";\n\n" );
 			}
-			$rows = $wpdb->get_results( "SELECT * FROM `{$table}` LIMIT {$st['offset']}, 1000", ARRAY_N );
+			$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 1000', $table, $st['offset'] ), ARRAY_N );
 			if ( $rows ) {
 				$values = array();
 				foreach ( $rows as $row ) {
@@ -308,11 +315,13 @@ final class WPSync_Backup {
 		$gz = '.gz' === substr( $file, -3 );
 		$fh = $gz ? gzopen( $file, 'rb' ) : fopen( $file, 'rb' ); // phpcs:ignore
 		if ( ! $fh ) {
-			return new WP_Error( 'wpsync_restore', 'Could not open ' . basename( $file ) );
+			return new WP_Error( 'livepull_restore', 'Could not open ' . basename( $file ) );
 		}
 		$run = function ( $sql ) use ( $wpdb ) {
+			// Restoring a backup replays LivePull's own SQL file exactly. $wpdb->query() would refuse
+			// rows it can't validate against the table's character set, leaving a half-restored site.
 			if ( $wpdb->dbh instanceof mysqli ) {
-				return mysqli_query( $wpdb->dbh, $sql ) ? true : mysqli_error( $wpdb->dbh );
+				return mysqli_query( $wpdb->dbh, $sql ) ? true : mysqli_error( $wpdb->dbh ); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_query, WordPress.DB.RestrictedFunctions.mysql_mysqli_error
 			}
 			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore
 		};
@@ -331,7 +340,7 @@ final class WPSync_Backup {
 				$ok = $run( $buf );
 				if ( true !== $ok ) {
 					$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
-					return new WP_Error( 'wpsync_restore', 'Restore stopped with a database error: ' . $ok . '. The database may be partly restored; try again, or import the file with your usual tool.' );
+					return new WP_Error( 'livepull_restore', 'Restore stopped with a database error: ' . $ok . '. The database may be partly restored; try again, or import the file with your usual tool.' );
 				}
 				$buf = '';
 			}
@@ -340,7 +349,7 @@ final class WPSync_Backup {
 		$run( 'SET FOREIGN_KEY_CHECKS=1' );
 		wp_cache_flush();
 		// Backups are taken at the start of a pull, so they contain that pull's lock.
-		delete_transient( 'wpsync_lock' );
+		delete_transient( 'livepull_lock' );
 		return true;
 	}
 

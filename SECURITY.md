@@ -1,16 +1,16 @@
 # Security policy
 
-WP Sync moves site data between WordPress installs, so security reports are taken seriously.
+LivePull moves site data between WordPress installs, so security reports are taken seriously.
 
 ## Reporting a vulnerability
 
 Please **don't open a public issue**. Report it privately through GitHub: on this repository, go to **Security → Report a vulnerability** ([direct link](https://github.com/alexmciver/WP-Sync-Tool/security/advisories/new)).
 
-Include what you found, how to reproduce it, the versions involved (WP Sync, WordPress, PHP) and the impact you expect. You'll get a reply as soon as possible, and credit in the release notes if you'd like it.
+Include what you found, how to reproduce it, the versions involved (LivePull, WordPress, PHP) and the impact you expect. You'll get a reply as soon as possible, and credit in the release notes if you'd like it.
 
 ## Supported versions
 
-Only the latest release receives security fixes. Update from **Tools → WP Sync → Check for updates**.
+Only the latest release receives security fixes. Update from **Tools → LivePull → Check for updates**.
 
 ## Design notes
 

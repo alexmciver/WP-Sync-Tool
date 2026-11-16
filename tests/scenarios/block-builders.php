@@ -1,6 +1,6 @@
 <?php
 // Block-based builders: Spectra (uagb), Kadence Blocks, GenerateBlocks – media IDs inside their block attributes.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 
 if ( 'create' === $phase ) {
