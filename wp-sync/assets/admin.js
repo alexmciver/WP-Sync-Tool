@@ -116,6 +116,10 @@
 		} ).catch( function ( e ) {
 			statusBox.className = 'wpsync-status is-error';
 			statusBox.textContent = e.message;
+			if ( e.code === 'wpsync_bad_key' || e.code === 'wpsync_no_secret' ) {
+				var conn = $( '#wpsync-connection' );
+				if ( conn ) { conn.open = true; var k = $( '#wpsync-key' ); if ( k ) { k.focus(); } }
+			}
 			btnPreview.disabled = btnPull.disabled = true;
 		} );
 	}

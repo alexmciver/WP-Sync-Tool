@@ -50,6 +50,14 @@ final class WPSync_Puller {
 		$remote = self::client()->get( 'status' );
 		if ( is_wp_error( $remote ) ) {
 			$hint = '';
+			if ( 'Invalid sync key.' === $remote->get_error_message() ) {
+				list( $k, $from ) = WPSync_Config::remote_secret_source();
+				return new WP_Error( 'wpsync_bad_key', sprintf(
+					'Live rejected the key. This site is using the key ending %s, from %s. On live, open Tools → WP Sync, click Show, and check it ends the same. If not, copy it and paste it under Connection here.',
+					WPSync_Config::key_hint( $k ),
+					$from
+				) );
+			}
 			$code = (int) ( is_array( $remote->get_error_data() ) && isset( $remote->get_error_data()['status'] ) ? $remote->get_error_data()['status'] : 0 );
 			if ( in_array( $code, array( 401, 403 ), true ) && 'Invalid sync key.' !== $remote->get_error_message() ) {
 				$hint = ' A firewall or security plugin on live may be blocking the request (allow ?rest_route=/wpsync/v1/).';
