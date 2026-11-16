@@ -88,6 +88,8 @@ Not yet. WPML and comments aren't supported yet either.
 * Security: pulls refuse settings, post types and taxonomies that aren't meant to be pulled.
 * Copy everything stages downloaded files until the database has switched over, so cancelling leaves the site unchanged.
 * Backups restore all or nothing, and pull backups no longer contain users.
+* Copy everything always finishes moving files after the switch-over, even if the request ends early.
+* Backups inside the website folder can't be downloaded over the web, on any server.
 * Ready for translation.
 
 = 1.0.0 =

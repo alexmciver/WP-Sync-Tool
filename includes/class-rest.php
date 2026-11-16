@@ -23,10 +23,21 @@ final class LivePull_Rest {
 		add_filter( 'rest_authentication_errors', array( __CLASS__, 'allow_keyed' ), 999 );
 	}
 
+	/**
+	 * Is this request for one of LivePull's own routes? Looks only at the route itself (the
+	 * path after the REST prefix, or the rest_route parameter), never the query string, so a
+	 * key can't be used to get past another plugin's REST lock on other routes.
+	 */
 	private static function is_ours() {
-		$uri   = isset( $_SERVER['REQUEST_URI'] ) ? esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
-		$route = isset( $_GET['rest_route'] ) ? (string) wp_unslash( $_GET['rest_route'] ) : ''; // phpcs:ignore
-		return false !== strpos( $uri, '/livepull/v1/' ) || 0 === strpos( $route, '/livepull/v1/' );
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only routing check; the request is authenticated by its key.
+		if ( isset( $_GET['rest_route'] ) ) {
+			$route = sanitize_text_field( wp_unslash( $_GET['rest_route'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		} else {
+			$path   = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_parse_url( esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ), PHP_URL_PATH ) : '';
+			$prefix = trailingslashit( (string) wp_parse_url( home_url( '/' . rest_get_url_prefix() . '/' ), PHP_URL_PATH ) ); // e.g. /wp-json/ or /sub/wp-json/
+			$route  = 0 === strpos( $path, $prefix ) ? '/' . substr( $path, strlen( $prefix ) ) : '';
+		}
+		return 0 === strpos( '/' . ltrim( $route, '/' ), '/livepull/v1/' );
 	}
 
 	public static function allow_keyed( $result ) {

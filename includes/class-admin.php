@@ -19,13 +19,26 @@ final class LivePull_Admin {
 
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
+		// Finish a "Copy everything" whose last request ended while moving files into place.
+		add_action( 'admin_init', array( __CLASS__, 'resume_copy' ) );
 		add_action( 'admin_post_livepull_save', array( __CLASS__, 'save' ) );
 		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore', 'full' ) as $a ) {
 			add_action( 'wp_ajax_livepull_' . $a, array( __CLASS__, 'ajax_' . $a ) );
 		}
 	}
 
-	public static function menu() {
+	/** Echo translated text that contains simple formatting (bold, italics, code, links). */
+	private static function kses_e( $html ) {
+		echo wp_kses( $html, array( 'strong' => array(), 'em' => array(), 'code' => array(), 'br' => array(), 'a' => array( 'href' => array(), 'target' => array(), 'rel' => array() ) ) );
+	}
+
+	public static function resume_copy() {
+		if ( current_user_can( self::CAP ) && LivePull_Full::placing() ) {
+			LivePull_Full::resume_placing();
+		}
+	}
+
+		public static function menu() {
 		$hook = add_management_page( 'LivePull', 'LivePull', self::CAP, self::SLUG, array( __CLASS__, 'render' ) );
 		add_action( 'admin_print_scripts-' . $hook, array( __CLASS__, 'noscript_note' ) );
 		add_action( 'admin_print_styles-' . $hook, array( __CLASS__, 'assets' ) );
@@ -158,7 +171,14 @@ final class LivePull_Admin {
 			}
 			if ( count( $copies ) > 1 ) :
 				?>
-				<div class="notice notice-warning"><p><strong><?php esc_html_e( 'LivePull is installed more than once', 'livepull' ); ?></strong> (<?php echo esc_html( implode( ', ', array_map( function ( $f, $v ) { return dirname( $f ) . ' v' . $v; }, array_keys( $copies ), $copies ) ) ); ?><?php esc_html_e( '). Only the copy in', 'livepull' ); ?> <code><?php echo esc_html( dirname( plugin_basename( LIVEPULL_FILE ) ) ); ?></code> <?php esc_html_e( 'is running. Delete the others on the', 'livepull' ); ?> <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>"><?php esc_html_e( 'Plugins', 'livepull' ); ?></a> <?php esc_html_e( 'screen (deactivate first) so updates go to the right one.', 'livepull' ); ?></p></div>
+				<div class="notice notice-warning"><p><?php self::kses_e( sprintf( /* translators: 1: list of copies, 2: folder name, 3: Plugins screen URL */ __( '<strong>LivePull is installed more than once</strong> (%1$s). Only the copy in <code>%2$s</code> is running. Delete the others on the <a href="%3$s">Plugins</a> screen (deactivate first) so updates go to the right one.', 'livepull' ), esc_html( implode( ', ', array_map( function ( $f, $v ) { return dirname( $f ) . ' v' . $v; }, array_keys( $copies ), $copies ) ) ), esc_html( dirname( plugin_basename( LIVEPULL_FILE ) ) ), esc_url( admin_url( 'plugins.php' ) ) ) ); ?></p></div>
+			<?php endif; ?>
+			<?php
+			$place_errors = get_option( 'livepull_full_place_errors' );
+			if ( $place_errors ) :
+				delete_option( 'livepull_full_place_errors' );
+				?>
+				<div class="notice notice-warning"><p><strong><?php esc_html_e( 'Copy everything finished, with problems moving some files:', 'livepull' ); ?></strong> <?php echo esc_html( implode( ' ', array_slice( (array) $place_errors, -3 ) ) ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( is_multisite() ) : ?>
 				<div class="notice notice-warning"><p><?php esc_html_e( 'Multisite networks are not supported yet.', 'livepull' ); ?></p></div>
@@ -259,7 +279,7 @@ final class LivePull_Admin {
 							<li><?php esc_html_e( 'Site title, tagline, homepage, posts page, sticky posts, site icon, logo', 'livepull' ); ?></li>
 						</ul>
 					</div>
-					<div><strong><?php esc_html_e( 'Only with', 'livepull' ); ?> <em><?php esc_html_e( 'Copy everything from live', 'livepull' ); ?></em></strong>
+					<div><strong><?php self::kses_e( __( 'Only with <em>Copy everything from live</em>', 'livepull' ) ); ?></strong>
 						<ul class="livepull-bullets">
 							<li><?php esc_html_e( 'Theme, Customizer and Divi theme options', 'livepull' ); ?></li>
 							<li><?php esc_html_e( 'Divi Theme Builder & Library, Elementor templates', 'livepull' ); ?></li>
@@ -275,7 +295,7 @@ final class LivePull_Admin {
 			<details class="livepull-advanced">
 				<summary><?php esc_html_e( 'More options', 'livepull' ); ?></summary>
 				<p>
-					<label><input type="checkbox" id="livepull-all"> <strong><?php esc_html_e( 'Pull all content from live', 'livepull' ); ?></strong> <?php esc_html_e( '(first sync)', 'livepull' ); ?></label><br>
+					<label><input type="checkbox" id="livepull-all"> <?php self::kses_e( __( '<strong>Pull all content from live</strong> (first sync)', 'livepull' ) ); ?></label><br>
 					<span class="description"><?php esc_html_e( 'Compares every post, page, media item and category on live, not just changes recorded since LivePull was installed. Your local edits are still kept as conflicts.', 'livepull' ); ?></span>
 				</p>
 				<p>
@@ -302,13 +322,13 @@ final class LivePull_Admin {
 		<div class="livepull-card">
 			<details id="livepull-full-card">
 				<summary><h2><?php esc_html_e( 'Copy everything from live', 'livepull' ); ?></h2></summary>
-				<p><?php esc_html_e( 'Replaces this site\'s', 'livepull' ); ?> <strong><?php esc_html_e( 'whole database', 'livepull' ); ?></strong> <?php esc_html_e( 'with a copy of live: posts, pages, menus, settings, Divi Theme Builder and Library, widgets, users and plugin data. Live URLs are switched to', 'livepull' ); ?> <code><?php echo esc_html( home_url() ); ?></code><?php esc_html_e( '. Use it to start fresh, or when this copy has drifted too far from live.', 'livepull' ); ?></p>
+				<p><?php self::kses_e( sprintf( /* translators: %s: this site's address */ __( 'Replaces this site\'s <strong>whole database</strong> with a copy of live: posts, pages, menus, settings, Divi Theme Builder and Library, widgets, users and plugin data. Live URLs are switched to <code>%s</code>. Use it to start fresh, or when this copy has drifted too far from live.', 'livepull' ), esc_html( home_url() ) ) ); ?></p>
 				<ul class="livepull-bullets">
-					<li><?php esc_html_e( 'Your current database is backed up first (restore it any time under', 'livepull' ); ?> <em><?php esc_html_e( 'Undo a pull or copy', 'livepull' ); ?></em>).</li>
+					<li><?php self::kses_e( __( 'Your current database is backed up first (restore it any time under <em>Undo a pull or copy</em>).', 'livepull' ) ); ?></li>
 					<li><?php esc_html_e( 'Nothing here changes until the very end, so you can cancel safely while it runs.', 'livepull' ); ?></li>
 					<li><?php esc_html_e( 'Kept as they are here: this site\'s address, its LivePull connection and "Discourage search engines".', 'livepull' ); ?></li>
-					<li><?php esc_html_e( 'Theme and plugin', 'livepull' ); ?> <em><?php esc_html_e( 'files', 'livepull' ); ?></em> <?php esc_html_e( 'aren\'t copied – keep those in Git.', 'livepull' ); ?></li>
-					<li><?php esc_html_e( 'Afterwards, log in with your', 'livepull' ); ?> <strong><?php esc_html_e( 'live site\'s', 'livepull' ); ?></strong> <?php esc_html_e( 'username and password.', 'livepull' ); ?></li>
+					<li><?php self::kses_e( __( 'Theme and plugin <em>files</em> aren\'t copied – keep those in Git.', 'livepull' ) ); ?></li>
+					<li><?php self::kses_e( __( 'Afterwards, log in with your <strong>live site\'s</strong> username and password.', 'livepull' ) ); ?></li>
 				</ul>
 				<p><label><input type="checkbox" id="livepull-full-files" checked> <?php esc_html_e( 'Also copy the uploads folder (images and other files; only missing or changed files are downloaded)', 'livepull' ); ?></label></p>
 				<p><button type="button" class="button" id="livepull-full-start"><?php esc_html_e( 'Copy everything from live…', 'livepull' ); ?></button>
@@ -323,7 +343,7 @@ final class LivePull_Admin {
 
 		<div class="livepull-card">
 			<h2><?php esc_html_e( 'Conflicts', 'livepull' ); ?> <span class="count" id="livepull-conflict-count">(<?php echo (int) count( $conflicts ); ?>)</span></h2>
-			<p class="description"><?php esc_html_e( 'Items changed on live', 'livepull' ); ?> <em><?php esc_html_e( 'and', 'livepull' ); ?></em> <?php esc_html_e( 'here since they were last pulled. They were left as they are here until you choose.', 'livepull' ); ?></p>
+			<p class="description"><?php self::kses_e( __( 'Items changed on live <em>and</em> here since they were last pulled. They were left as they are here until you choose.', 'livepull' ) ); ?></p>
 			<div id="livepull-conflicts"><?php self::conflicts_table( $conflicts ); ?></div>
 		</div>
 
@@ -338,7 +358,7 @@ final class LivePull_Admin {
 				<table class="widefat striped livepull-table"><thead><tr><th><?php esc_html_e( 'Backup taken', 'livepull' ); ?></th><th><?php esc_html_e( 'Size', 'livepull' ); ?></th><th></th></tr></thead><tbody>
 				<?php foreach ( array_slice( $backups, 0, 10 ) as $b ) : ?>
 					<tr>
-						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> <?php esc_html_e( 'ago, before a', 'livepull' ); ?> <?php echo esc_html( 'copy' === $b['kind'] ? __( 'full copy', 'livepull' ) : __( 'pull', 'livepull' ) ); ?>)</span></td>
+						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( sprintf( 'copy' === $b['kind'] ? /* translators: %s: time span, e.g. "5 mins" */ __( '%s ago, before a full copy', 'livepull' ) : /* translators: %s: time span, e.g. "5 mins" */ __( '%s ago, before a pull', 'livepull' ), human_time_diff( $b['time'] ) ) ); ?>)</span></td>
 						<td><?php echo esc_html( size_format( $b['size'] ) ); ?></td>
 						<td class="livepull-row-actions"><button type="button" class="button livepull-restore" data-file="<?php echo esc_attr( $b['name'] ); ?>"><?php esc_html_e( 'Restore', 'livepull' ); ?></button></td>
 					</tr>
@@ -369,11 +389,11 @@ final class LivePull_Admin {
 				</form>
 				<?php endif; ?>
 				<?php $latest = LivePull_Backup::latest(); ?>
-				<p class="description"><?php esc_html_e( 'Backups are saved before every pull in', 'livepull' ); ?> <code><?php echo esc_html( LivePull_Backup::dir() ); ?></code><?php echo $latest ? ' (latest: <code>' . esc_html( basename( $latest ) ) . '</code>)' : ''; ?><?php esc_html_e( '. Restore with', 'livepull' ); ?> <code><?php esc_html_e( 'wp db import', 'livepull' ); ?></code> <?php esc_html_e( 'or phpMyAdmin.', 'livepull' ); ?></p>
+				<p class="description"><?php self::kses_e( sprintf( /* translators: 1: backups folder, 2: latest backup note (may be empty) */ __( 'Backups are saved before every pull in <code>%1$s</code>%2$s. Restore with <code>wp db import</code> or phpMyAdmin.', 'livepull' ), esc_html( LivePull_Backup::dir() ), $latest ? ' (' . sprintf( /* translators: %s: file name */ __( 'latest: <code>%s</code>', 'livepull' ), esc_html( basename( $latest ) ) ) . ')' : '' ) ); ?></p>
 				<?php if ( LivePull_Backup::in_web_root() ) : ?>
-					<p class="description"><strong><?php esc_html_e( 'Backups are inside the website\'s own folder', 'livepull' ); ?></strong> <?php esc_html_e( 'because the folder above it can\'t be written to. They have unguessable names and are blocked on Apache and LiteSpeed, but nginx ignores those rules. To keep them completely out of reach, add', 'livepull' ); ?> <code><?php esc_html_e( 'define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/outside/the/website\' );', 'livepull' ); ?></code> <?php esc_html_e( 'to wp-config.php.', 'livepull' ); ?></p>
+					<p class="description"><?php self::kses_e( __( '<strong>Backups are inside the website\'s own folder</strong> because the folder above it can\'t be written to. They are saved as files that can\'t be downloaded over the web, with unguessable names. To keep them completely out of the website, add <code>define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/outside/the/website\' );</code> to wp-config.php.', 'livepull' ) ); ?></p>
 				<?php endif; ?>
-				<p class="description"><?php esc_html_e( 'Terminal:', 'livepull' ); ?> <code><?php esc_html_e( 'wp livepull status', 'livepull' ); ?></code>, <code><?php esc_html_e( 'wp livepull pull --dry-run', 'livepull' ); ?></code>, <code><?php esc_html_e( 'wp livepull pull', 'livepull' ); ?></code>.</p>
+				<p class="description"><?php self::kses_e( __( 'Terminal: <code>wp livepull status</code>, <code>wp livepull pull --dry-run</code>, <code>wp livepull pull</code>.', 'livepull' ) ); ?></p>
 			</details>
 		</div>
 		<?php
@@ -384,17 +404,19 @@ final class LivePull_Admin {
 			echo '<p class="livepull-empty">No conflicts.</p>';
 			return;
 		}
-		echo '<table class="widefat striped livepull-table"><thead><tr><th>Item</th><th>What happened</th><th></th></tr></thead><tbody>';
+		printf( '<table class="widefat striped livepull-table"><thead><tr><th>%s</th><th>%s</th><th></th></tr></thead><tbody>', esc_html__( 'Item', 'livepull' ), esc_html__( 'What happened', 'livepull' ) );
 		foreach ( $conflicts as $key => $c ) {
 			$edit = '';
 			if ( ! empty( $c['local_id'] ) ) {
 				$edit = 0 === strpos( $key, 'term:' ) ? get_edit_term_link( (int) $c['local_id'] ) : get_edit_post_link( (int) $c['local_id'], 'raw' );
 			}
 			printf(
-				'<tr data-key="%1$s"><td>%2$s</td><td>%3$s</td><td class="livepull-row-actions"><button type="button" class="button livepull-take">Use live version</button> <button type="button" class="button-link livepull-keep">Keep mine</button></td></tr>',
+				'<tr data-key="%1$s"><td>%2$s</td><td>%3$s</td><td class="livepull-row-actions"><button type="button" class="button livepull-take">%4$s</button> <button type="button" class="button-link livepull-keep">%5$s</button></td></tr>',
 				esc_attr( $key ),
 				$edit ? '<a href="' . esc_url( $edit ) . '">' . esc_html( $c['label'] ) . '</a>' : esc_html( $c['label'] ),
-				esc_html( ucfirst( $c['reason'] ) )
+				esc_html( ucfirst( $c['reason'] ) ),
+				esc_html__( 'Use live version', 'livepull' ),
+				esc_html__( 'Keep mine', 'livepull' )
 			);
 		}
 		echo '</tbody></table>';
@@ -410,7 +432,7 @@ final class LivePull_Admin {
 		<div class="livepull-card">
 			<?php if ( $collapsed ) : ?><details><summary><h2><?php esc_html_e( 'Let other sites pull from this one', 'livepull' ); ?></h2></summary><?php else : ?>
 			<h2><?php esc_html_e( 'Is this the live site?', 'livepull' ); ?></h2>
-			<p><?php esc_html_e( 'Nothing else to set up here. Copy the connection code into', 'livepull' ); ?> <strong><?php esc_html_e( 'Tools → LivePull', 'livepull' ); ?></strong> <?php esc_html_e( 'on your local site.', 'livepull' ); ?></p>
+			<p><?php self::kses_e( __( 'Nothing else to set up here. Copy the connection code into <strong>Tools → LivePull</strong> on your local site.', 'livepull' ) ); ?></p>
 			<?php endif; ?>
 
 			<?php if ( strlen( $secret ) >= 32 ) : ?>
@@ -465,7 +487,7 @@ final class LivePull_Admin {
 				<?php endif; ?>
 			</div>
 			<?php self::recent_changes(); ?>
-			<p class="description"><?php esc_html_e( 'Changes recorded on this site:', 'livepull' ); ?> <?php echo (int) $count; ?><?php esc_html_e( '. Pulling never writes anything to this site; the key only allows reading content.', 'livepull' ); ?></p>
+			<p class="description"><?php echo esc_html( sprintf( /* translators: %d: number of changes */ __( 'Changes recorded on this site: %d. Pulling never writes anything to this site; the key only allows reading content.', 'livepull' ), (int) $count ) ); ?></p>
 			<?php if ( $collapsed ) : ?></details><?php endif; ?>
 		</div>
 		<?php
@@ -475,27 +497,29 @@ final class LivePull_Admin {
 	private static function recent_changes() {
 		global $wpdb;
 		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT object_type, sync_id, object_id, action, created_at FROM %i WHERE source = 'local' ORDER BY id DESC LIMIT 15", LivePull_Config::table() ) );
-		echo '<details class="livepull-recent"><summary><strong>Recent changes recorded on this site</strong></summary>';
+		echo '<details class="livepull-recent"><summary><strong>' . esc_html__( 'Recent changes recorded on this site', 'livepull' ) . '</strong></summary>';
 		if ( ! $rows ) {
-			echo '<p class="livepull-empty">None yet. Edit something and it will appear here.</p></details>';
+			echo '<p class="livepull-empty">' . esc_html__( 'None yet. Edit something and it will appear here.', 'livepull' ) . '</p></details>';
 			return;
 		}
-		echo '<table class="widefat striped livepull-table"><thead><tr><th>When</th><th>Item</th><th>Change</th></tr></thead><tbody>';
+		printf( '<table class="widefat striped livepull-table"><thead><tr><th>%s</th><th>%s</th><th>%s</th></tr></thead><tbody>', esc_html__( 'When', 'livepull' ), esc_html__( 'Item', 'livepull' ), esc_html__( 'Change', 'livepull' ) );
 		foreach ( $rows as $r ) {
 			if ( 'option' === $r->object_type ) {
 				$n    = LivePull_Importer::option_name( $r->sync_id );
 				$item = 0 === strpos( $n, 'theme_mods_' ) ? __( 'Setting: menu locations / logo', 'livepull' ) : sprintf( /* translators: %s: option name */ __( 'Setting: %s', 'livepull' ), $n );
 			} elseif ( 'term' === $r->object_type ) {
 				$t    = get_term( (int) $r->object_id );
-				$item = ( $t && ! is_wp_error( $t ) ) ? $t->taxonomy . ' "' . $t->name . '"' : 'term #' . $r->object_id;
+				$item = ( $t && ! is_wp_error( $t ) ) ? $t->taxonomy . ' "' . $t->name . '"' : sprintf( /* translators: %d: term ID */ __( 'term #%d', 'livepull' ), $r->object_id );
 			} else {
 				$p    = get_post( (int) $r->object_id );
-				$item = $p ? ( 'nav_menu_item' === $p->post_type ? 'menu item' : $p->post_type ) . ' "' . ( '' !== $p->post_title ? $p->post_title : '#' . $p->ID ) . '"' : 'item #' . $r->object_id . ' (deleted)';
+				$item = $p ? ( 'nav_menu_item' === $p->post_type ? __( 'menu item', 'livepull' ) : $p->post_type ) . ' "' . ( '' !== $p->post_title ? $p->post_title : '#' . $p->ID ) . '"' : sprintf( /* translators: %d: post ID */ __( 'item #%d (deleted)', 'livepull' ), $r->object_id );
 			}
-			printf( '<tr><td>%s</td><td>%s</td><td>%s</td></tr>', esc_html( human_time_diff( strtotime( $r->created_at . ' UTC' ) ) . ' ago' ), esc_html( $item ), esc_html( 'delete' === $r->action ? 'deleted' : 'added/edited' ) );
+			printf( '<tr><td>%s</td><td>%s</td><td>%s</td></tr>', esc_html( sprintf( /* translators: %s: time span, e.g. "5 mins" */ __( '%s ago', 'livepull' ), human_time_diff( strtotime( $r->created_at . ' UTC' ) ) ) ), esc_html( $item ), esc_html( 'delete' === $r->action ? __( 'deleted', 'livepull' ) : __( 'added/edited', 'livepull' ) ) );
 		}
 		echo '</tbody></table>';
-		echo '<p class="description">Not seeing an edit here? Then LivePull doesn\'t track that kind of change (for example Divi Theme Builder, theme/Customizer options, widgets, or plugin settings) – use <em>Copy everything from live</em> on your local site to bring those across.</p>';
+		echo '<p class="description">';
+		self::kses_e( __( 'Not seeing an edit here? Then LivePull doesn\'t track that kind of change (for example Divi Theme Builder, theme/Customizer options, widgets, or plugin settings) – use <em>Copy everything from live</em> on your local site to bring those across.', 'livepull' ) );
+		echo '</p>';
 		echo '</details>';
 	}
 

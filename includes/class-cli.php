@@ -299,9 +299,10 @@ class LivePull_CLI {
 		}
 		WP_CLI::confirm( 'Restore ' . basename( $file ) . '? Everything pulled or edited since then will be undone.', $assoc );
 		$now = LivePull_Backup::create( 0 === strpos( basename( $file ), 'pre-copy-' ), $file );
-		if ( ! is_wp_error( $now ) ) {
-			WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
+		if ( is_wp_error( $now ) ) {
+			WP_CLI::error( 'Could not back up the current state first, so nothing was restored: ' . $now->get_error_message() );
 		}
+		WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
 		$res = LivePull_Backup::restore( $file );
 		if ( is_wp_error( $res ) ) {
 			WP_CLI::error( $res->get_error_message() );

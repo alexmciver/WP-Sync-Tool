@@ -9,7 +9,12 @@ All notable changes to LivePull. Versions follow [semantic versioning](https://s
 - Restoring a backup is now all or nothing: if anything goes wrong, the site is left exactly as it was. Restoring your oldest backup can no longer delete it first.
 - Pull backups no longer include users or password hashes (pulls never change users). Backups that can't be kept outside the website folder go in a folder with an unguessable name, and the screen explains how to move them.
 - The GitHub download checks each update against a published checksum before installing it.
-- The admin screen is ready for translation.
+- The admin screen is ready for translation, with whole sentences for translators.
+- *Copy everything* can always finish moving its files, even if the request ends right after the switch-over (time limit, closed tab, logged out). Staged files are never deleted once the database has switched, and any file that can't be moved is kept and reported.
+- Backups that have to stay inside the website folder are saved as files that can't be downloaded over the web on any server, nginx included.
+- A terminal restore stops if the safety backup before it fails.
+- Downloads connect to the exact address that passed the safety check (no DNS tricks), and staging folders get the same access rules as backups.
+- Live URLs are only rewritten where the address ends, so `site.co` never touches `site.co.uk`. The key only opens LivePull's own routes. Live's table definitions are checked before *Copy everything* runs them. Very large media libraries are listed without loading everything into memory.
 
 ## 1.0.0
 - First release.

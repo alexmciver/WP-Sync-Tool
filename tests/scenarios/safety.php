@@ -48,6 +48,36 @@ if ( 'verify' === $phase ) {
 	t_ok( ! term_exists( 'spoofed', 'wp_theme' ), "spoofed live can't create terms in excluded taxonomies" );
 	t_ok( ! username_exists( 'evil' ), 'unknown kinds of item are ignored' );
 	t_ok( count( $report['skipped'] ) >= 9, 'refused items are reported (' . count( $report['skipped'] ) . ' skipped)' );
+	// WordPress's HTML filter (kses) is off in the terminal; switch it on as for an editor, pull, check it's back.
+	kses_init_filters();
+	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
+	t_ok( false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' ), "WordPress's HTML filter is switched back on after a pull" );
+	kses_remove_filters();
+
+	// --- URL rewriting stops at the end of the address.
+	$f = array( 'https://site.co' );
+	$t = array( 'http://local.test' );
+	t_eq( LivePull_Serial::text( 'a https://site.co/x b https://site.co.uk/y c https://site.co:8080/z', $f, $t ), 'a http://local.test/x b https://site.co.uk/y c https://site.co:8080/z', 'URL rewriting leaves look-alike domains and other ports alone' );
+
+	// --- Only LivePull's own REST routes accept the key.
+	$ours = new ReflectionMethod( 'LivePull_Rest', 'is_ours' );
+	$ours->setAccessible( true );
+	$saved = array( $_SERVER['REQUEST_URI'] ?? null, $_GET );
+	$_GET  = array();
+	$_SERVER['REQUEST_URI'] = '/wp-json/wp/v2/users?x=/livepull/v1/status';
+	$a = $ours->invoke( null );
+	$_SERVER['REQUEST_URI'] = '/wp-json/livepull/v1/status';
+	$b = $ours->invoke( null );
+	list( $_SERVER['REQUEST_URI'], $_GET ) = $saved;
+	t_ok( ! $a && $b, 'the key only opens LivePull\'s own routes, not others with LivePull in the query string' );
+
+	// --- Live's table definitions are checked before they run.
+	$uc = new ReflectionMethod( 'LivePull_Full', 'unsafe_create' );
+	$uc->setAccessible( true );
+	$tn = $wpdb->prefix . 'lpulltmp_x';
+	t_ok( '' === $uc->invoke( null, "CREATE TABLE `$tn` (`a` varchar(9) DEFAULT 'select;' COMMENT 'Select it') ENGINE=InnoDB", $tn )
+		&& '' !== $uc->invoke( null, "CREATE TABLE `$tn` (`a` int) ENGINE=FEDERATED CONNECTION='mysql://x'", $tn )
+		&& '' !== $uc->invoke( null, "CREATE TABLE `$tn` (`a` int) DATA DIRECTORY='/tmp'", $tn ), 'unsafe table definitions from live are refused' );
 
 	// --- Redirects: the key never leaves the live site, downloads can't be bounced inward.
 	$seen = array();
@@ -103,4 +133,37 @@ if ( 'verify' === $phase ) {
 
 if ( 'verify_full' === $phase ) {
 	t_eq( count( (array) glob( WP_CONTENT_DIR . '/livepull-stage-*', GLOB_ONLYDIR ) ), 0, 'Copy everything leaves no staged files behind' );
+
+	// --- A copy whose request dies right after the switch resumes; staged files are never lost.
+	update_option( 'livepull_allow_full_copy', 'always' ); // (local's own setting; live allows it in run.sh)
+	$up    = wp_get_upload_dir()['basedir'];
+	$gone  = array_slice( (array) glob( $up . '/20*/*/*.jpg' ), 0, 10 );
+	foreach ( $gone as $f ) {
+		unlink( $f );
+	}
+	$state = LivePull_Full::start( array( 'files' => true, 'backup' => false ) );
+	t_ok( is_array( $state ), 'copy started' );
+	if ( is_array( $state ) ) {
+		$ct = new ReflectionMethod( 'LivePull_Full', 'copy_table_chunk' );
+		$fc = new ReflectionMethod( 'LivePull_Full', 'files_chunk' );
+		$sw = new ReflectionMethod( 'LivePull_Full', 'swap' );
+		$ct->setAccessible( true );
+		$fc->setAccessible( true );
+		$sw->setAccessible( true );
+		while ( is_array( $state ) && $state['ti'] < count( $state['tables'] ) ) {
+			$state = $ct->invoke( null, $state );
+		}
+		$state['phase'] = 'files';
+		while ( 'files' === $state['phase'] ) {
+			$state = $fc->invoke( null, $state, '__return_false' );
+		}
+		$stale = $state; // What a request that dies right after the switch leaves behind.
+		$args  = array( &$state );
+		$sw->invokeArgs( null, $args );
+		t_ok( '' !== LivePull_Full::placing(), 'switching records that files still need moving' );
+		$res = LivePull_Full::step( $stale, 8 );
+		t_ok( is_array( $res ) && $res['done'], 'the next request carries on instead of cancelling' );
+		t_eq( count( array_filter( $gone, 'is_file' ) ), count( $gone ), 'every staged file reached the uploads folder' );
+		t_ok( '' === LivePull_Full::placing() && ! glob( WP_CONTENT_DIR . '/livepull-stage-*', GLOB_ONLYDIR ), 'nothing left to move, no staging folder left' );
+	}
 }

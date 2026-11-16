@@ -139,7 +139,7 @@ final class LivePull_Importer {
 			return $value;
 		}
 		if ( is_string( $value ) ) {
-			return str_replace( $this->url_from, $this->url_to, $value );
+			return LivePull_Serial::text( $value, $this->url_from, $this->url_to );
 		}
 		if ( is_array( $value ) ) {
 			foreach ( $value as $k => $v ) {
@@ -160,6 +160,9 @@ final class LivePull_Importer {
 		$items = self::sort_items( $items );
 
 		LivePull_Logger::suspend();
+		// Content is copied exactly as live has it; WordPress's HTML filter (kses) would strip
+		// page-builder markup for users without unfiltered_html. Put it back afterwards.
+		$kses_was_on = false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' );
 		kses_remove_filters();
 		remove_action( 'post_updated', 'wp_save_post_revision', 10 );
 		// Never let a pull trigger outgoing side effects from the local site.
@@ -185,6 +188,9 @@ final class LivePull_Importer {
 				}
 			}
 		} finally {
+			if ( $kses_was_on ) {
+				kses_init_filters();
+			}
 			wp_defer_term_counting( false );
 			add_action( 'post_updated', 'wp_save_post_revision', 10, 1 );
 			add_action( 'publish_post', '_publish_post_hook', 5, 1 );

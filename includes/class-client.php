@@ -6,6 +6,8 @@ final class LivePull_Client {
 
 	private $base;
 	private $secret;
+	/** Address url_allowed() approved for the last non-live host, so the request uses exactly that. */
+	private $pinned = null;
 
 	public function __construct( $base, $secret ) {
 		$this->base   = untrailingslashit( $base );
@@ -88,7 +90,8 @@ final class LivePull_Client {
 		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
 			return false;
 		}
-		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$host         = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$this->pinned = null;
 		if ( $host && $host === strtolower( (string) wp_parse_url( $this->base, PHP_URL_HOST ) ) ) {
 			return true;
 		}
@@ -101,7 +104,13 @@ final class LivePull_Client {
 		if ( ! filter_var( $ip, FILTER_VALIDATE_IP ) ) {
 			return false;
 		}
-		return false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
+		if ( false === filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
+			return false;
+		}
+		if ( ! filter_var( $host, FILTER_VALIDATE_IP ) ) {
+			$this->pinned = array( $host, $ip ); // Connect to the address that was checked, not a fresh lookup.
+		}
+		return true;
 	}
 
 	/** @return true|WP_Error */
@@ -147,7 +156,20 @@ final class LivePull_Client {
 				}
 				$args['headers'] = $this->download_headers( $url );
 			}
+			$pin = null;
+			if ( 'download' === $purpose && $this->pinned ) {
+				list( $host, $ip ) = $this->pinned;
+				$port = wp_parse_url( $url, PHP_URL_PORT );
+				$port = $port ? $port : ( 'https' === wp_parse_url( $url, PHP_URL_SCHEME ) ? 443 : 80 );
+				$pin  = function ( $handle ) use ( $host, $port, $ip ) {
+					curl_setopt( $handle, CURLOPT_RESOLVE, array( $host . ':' . $port . ':' . $ip ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.curl_curl_setopt -- pins the checked address (DNS rebinding).
+				};
+				add_action( 'http_api_curl', $pin );
+			}
 			$res = wp_remote_get( $url, $args );
+			if ( $pin ) {
+				remove_action( 'http_api_curl', $pin );
+			}
 			if ( is_wp_error( $res ) ) {
 				return $res;
 			}

@@ -18,4 +18,4 @@ Only the latest release receives security fixes. Update from **Tools → LivePul
 - *Copy everything* is opt-in on live and can be time-limited. Sessions are never copied.
 - Backups are stored outside the web root where possible, otherwise with deny rules and unguessable names.
 - Files received from live are never written as executable or server-config files, and media is never downloaded from private, reserved or link-local addresses.
-- Remote data is never passed to `unserialize()` with classes allowed.
+- Remote data is only unserialized with `allowed_classes` limited to `stdClass` (a plain data object some page builders store, with no methods or magic behaviour), so no plugin or WordPress classes can be created from it. Raw meta values are copied byte for byte without unserializing.

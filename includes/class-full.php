@@ -25,7 +25,34 @@ final class LivePull_Serial {
 			}
 			return $value; // Unparseable serialized data: leave it alone rather than corrupt it.
 		}
-		return str_replace( $from, $to, $value );
+		return self::text( $value, $from, $to );
+	}
+
+	/**
+	 * Replace URLs/paths in plain text, only where each one ends: "https://site.co" changes in
+	 * "https://site.co/page" or "https://site.co" but not in "https://site.co.uk" or
+	 * "https://site.co:8080". One pass, longest match first, so nothing is replaced twice.
+	 */
+	public static function text( $value, array $from, array $to ) {
+		if ( ! is_string( $value ) || '' === $value || ! $from ) {
+			return $value;
+		}
+		static $cache = array();
+		$key = md5( implode( "\0", $from ) );
+		if ( ! isset( $cache[ $key ] ) ) {
+			$sorted = $from;
+			usort( $sorted, function ( $a, $b ) {
+				return strlen( $b ) - strlen( $a );
+			} );
+			$cache[ $key ] = '~(' . implode( '|', array_map( function ( $f ) {
+				return preg_quote( $f, '~' );
+			}, $sorted ) ) . ')(?![A-Za-z0-9_-]|\.[A-Za-z0-9]|:\d)~';
+		}
+		$map = array_combine( $from, $to );
+		$out = preg_replace_callback( $cache[ $key ], function ( $m ) use ( $map ) {
+			return $map[ $m[1] ];
+		}, $value );
+		return null === $out ? $value : $out;
 	}
 
 	private static function walk( $s, &$p, &$out, $from, $to ) {
@@ -257,8 +284,48 @@ final class LivePull_Full {
 		if ( ! is_dir( $base ) ) {
 			return array( 'files' => array(), 'next' => $offset, 'done' => true, 'baseurl' => $uploads['baseurl'] );
 		}
-		$skip  = self::skipped_dirs();
-		$list  = array();
+		// The listing is written to a temporary file on the first page and read page by page
+		// after that, so even a huge media library never has to fit in memory.
+		$index = trailingslashit( get_temp_dir() ) . 'livepull-files-' . md5( $base . '|' . LivePull_Config::secret() ) . '.txt';
+		if ( 0 === $offset || ! is_readable( $index ) ) {
+			$total = self::write_file_index( $base, $index );
+			if ( is_wp_error( $total ) ) {
+				return $total;
+			}
+		}
+		$fh = new SplFileObject( $index, 'r' );
+		$total = (int) trim( (string) $fh->fgets() ); // First line: how many files.
+		$fh->seek( $offset + 1 );
+		$files = array();
+		while ( count( $files ) < $limit && ! $fh->eof() ) {
+			$rel = rtrim( (string) $fh->fgets(), "\n" );
+			if ( '' === $rel ) {
+				continue;
+			}
+			$files[] = array(
+				'path' => $rel,
+				'size' => (int) @filesize( $base . '/' . $rel ), // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- deleted since listing: size 0.
+				'url'  => $uploads['baseurl'] . '/' . implode( '/', array_map( 'rawurlencode', explode( '/', $rel ) ) ),
+			);
+		}
+		$next = $offset + count( $files );
+		$done = $next >= $total;
+		$fh   = null;
+		if ( $done ) {
+			wp_delete_file( $index );
+		}
+		return array( 'files' => $files, 'next' => $next, 'done' => $done, 'total' => $total );
+	}
+
+	/** Write every uploads file path (one per line, count first) to $index. @return int|WP_Error */
+	private static function write_file_index( $base, $index ) {
+		$skip = self::skipped_dirs();
+		$tmp  = $index . '.part';
+		$out  = fopen( $tmp, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+		if ( ! $out ) {
+			return new WP_Error( 'livepull_files', 'Could not write a temporary file listing on live.', array( 'status' => 500 ) );
+		}
+		$count = 0;
 		$it    = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $base, FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $it as $file ) {
 			if ( ! $file->isFile() ) {
@@ -270,22 +337,22 @@ final class LivePull_Full {
 					continue 2;
 				}
 			}
-			if ( preg_match( '/\.(log|php\d?|phtml|phar|sql)(\.gz)?$/i', $rel ) ) {
+			if ( preg_match( '/\.(log|php\d?|phtml|phar|sql)(\.gz)?$/i', $rel ) || false !== strpos( $rel, "\n" ) ) {
 				continue; // Never list code, logs or database dumps.
 			}
-			$list[] = $rel;
+			fwrite( $out, $rel . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+			$count++;
 		}
-		sort( $list );
-		$slice = array_slice( $list, $offset, $limit );
-		$files = array();
-		foreach ( $slice as $rel ) {
-			$files[] = array(
-				'path' => $rel,
-				'size' => (int) filesize( $base . '/' . $rel ),
-				'url'  => $uploads['baseurl'] . '/' . implode( '/', array_map( 'rawurlencode', explode( '/', $rel ) ) ),
-			);
-		}
-		return array( 'files' => $files, 'next' => $offset + count( $slice ), 'done' => $offset + count( $slice ) >= count( $list ), 'total' => count( $list ) );
+		fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		// Count goes first: write it, then the list.
+		$final = fopen( $index, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+		$in    = fopen( $tmp, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+		fwrite( $final, $count . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+		stream_copy_to_stream( $in, $final );
+		fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		fclose( $final ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		wp_delete_file( $tmp );
+		return $count;
 	}
 
 	/* ============================================================= Local side */
@@ -314,6 +381,9 @@ final class LivePull_Full {
 		$list = self::client()->get( 'db-tables' );
 		if ( is_wp_error( $list ) ) {
 			return $list;
+		}
+		if ( ! self::resume_placing( 0 ) ) {
+			return new WP_Error( 'livepull_placing', 'Files from the last copy are still being moved into place. Try again in a moment.' );
 		}
 		set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		self::clear_cancel();
@@ -407,18 +477,23 @@ final class LivePull_Full {
 		$wpdb->query( "SET SESSION sql_mode = 'NO_AUTO_VALUE_ON_ZERO'" );
 
 		while ( ! $state['done'] ) {
-			if ( 'place' === $state['phase'] ) {
-				// The database has switched over: finish moving the new files into place.
+			// Once the database has switched over there's no going back: whatever state this
+			// request was handed (even a stale "swap"), carry on moving the files into place.
+			if ( 'place' === $state['phase'] || self::placing() ) {
+				$state['phase']    = 'place';
 				$state['activity'] = sprintf( 'Moving %d downloaded files into the uploads folder…', $state['staged'] );
-				// Moves are renames on the same disk, so finish them all now: after the switch
-				// the person may be logged out and no further request would come.
-				if ( self::place_files( $state, '__return_false' ) ) {
+				// Moves are renames on the same disk, so allow a little longer than a normal step:
+				// after the switch the person may be logged out and the next request may not come.
+				// If it does run out of time, any admin page load finishes the job (resume_placing()).
+				$place_out = function () use ( $t0, $budget ) {
+					return $budget > 0 && ( microtime( true ) - $t0 ) >= max( $budget, 20 );
+				};
+				if ( self::place_files( $state, $place_out ) ) {
 					$state['done']     = true;
 					$state['activity'] = 'Finished';
 					delete_transient( LivePull_Puller::LOCK );
-					break;
 				}
-				continue;
+				break;
 			}
 			if ( self::cancelled() ) {
 				self::clear_cancel();
@@ -477,6 +552,7 @@ final class LivePull_Full {
 					self::abort();
 					return $res;
 				}
+				update_option( self::PLACING, $state['stage'], false ); // Already there; just in case live has no options table.
 				$state['phase'] = 'place';
 				continue;
 			}
@@ -511,20 +587,65 @@ final class LivePull_Full {
 	/** Stop: drop temporary tables and downloaded files. This site is unchanged. */
 	public static function abort() {
 		self::drop_temp_tables();
-		self::remove_stages();
+		if ( ! self::placing() ) { // Never after the switch: those files belong to the new database.
+			self::remove_stages();
+		}
 		delete_transient( LivePull_Puller::LOCK );
 	}
 
-	/** A new, unguessable staging folder next to uploads (same disk, so moving is instant). */
-	private static function stage_dir() {
-		$uploads = wp_get_upload_dir();
-		return wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-' . wp_generate_password( 20, false );
+	const PLACING = 'livepull_full_placing';
+
+	/** The staging folder still being moved into uploads after a switch-over, or ''. */
+	public static function placing() {
+		global $wpdb;
+		$v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::PLACING ) );
+		return $v ? (string) $v : '';
 	}
 
+	/**
+	 * Finish moving files after a copy whose request ended early (time limit, closed tab, logged
+	 * out by the switch). Runs on admin page loads and before any new copy. @return bool done.
+	 */
+	public static function resume_placing( $seconds = 20 ) {
+		$stage = self::placing();
+		if ( ! $stage ) {
+			return true;
+		}
+		$t0    = microtime( true );
+		$state = array( 'stage' => $stage, 'errors' => array() );
+		$done  = self::place_files( $state, function () use ( $t0, $seconds ) {
+			return $seconds > 0 && ( microtime( true ) - $t0 ) >= $seconds;
+		} );
+		if ( $state['errors'] ) {
+			update_option( 'livepull_full_place_errors', $state['errors'], false );
+		}
+		return $done;
+	}
+
+	/** Access-rule files written into each staging folder (never moved into uploads). */
+	const STAGE_GUARDS = array( '.htaccess', 'web.config', 'index.php', 'index.html' );
+
+	/**
+	 * A new, unguessable staging folder next to uploads (same disk, so moving is instant), with
+	 * the same deny rules as the backups folder.
+	 */
+	private static function stage_dir() {
+		$uploads = wp_get_upload_dir();
+		$dir     = wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-' . wp_generate_password( 24, false );
+		if ( wp_mkdir_p( $dir ) ) {
+			LivePull_Backup::protect( $dir );
+		}
+		return $dir;
+	}
+
+	/** Delete abandoned staging folders (never the one still being moved into place). */
 	private static function remove_stages() {
 		$uploads = wp_get_upload_dir();
+		$keep    = self::placing();
 		foreach ( (array) glob( wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-*', GLOB_ONLYDIR ) as $dir ) {
-			LivePull_Config::fs()->delete( $dir, true );
+			if ( wp_normalize_path( $dir ) !== $keep ) {
+				LivePull_Config::fs()->delete( $dir, true );
+			}
 		}
 	}
 
@@ -535,15 +656,21 @@ final class LivePull_Full {
 	}
 
 	/**
-	 * Move staged files into uploads. @return bool true when every file is in place.
+	 * Move staged files into uploads, resumably: each moved file leaves the staging folder, so
+	 * a later call carries on where this one stopped.
+	 *
+	 * @return bool true when finished (false: out of time, call again).
 	 */
 	private static function place_files( array &$state, callable $out ) {
-		$fs = LivePull_Config::fs();
-		if ( ! is_dir( $state['stage'] ) ) {
+		$fs    = LivePull_Config::fs();
+		$stage = $state['stage'];
+		if ( ! is_dir( $stage ) ) {
+			delete_option( self::PLACING );
 			return true;
 		}
 		$uploads = wp_normalize_path( wp_get_upload_dir()['basedir'] );
-		$it      = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $state['stage'], FilesystemIterator::SKIP_DOTS ) );
+		$failed  = 0;
+		$it      = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $stage, FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $it as $file ) {
 			if ( $out() ) {
 				return false;
@@ -551,18 +678,61 @@ final class LivePull_Full {
 			if ( ! $file->isFile() ) {
 				continue;
 			}
-			$rel  = ltrim( substr( wp_normalize_path( $file->getPathname() ), strlen( $state['stage'] ) ), '/' );
+			$rel = ltrim( substr( wp_normalize_path( $file->getPathname() ), strlen( $stage ) ), '/' );
+			if ( in_array( $rel, self::STAGE_GUARDS, true ) ) {
+				continue; // The staging folder's own access rules, not uploads.
+			}
 			$dest = LivePull_Importer::safe_dest( $rel );
 			if ( ! $dest || 0 !== strpos( $dest, $uploads . '/' ) ) {
 				continue;
 			}
 			wp_mkdir_p( dirname( $dest ) );
-			if ( ! $fs->move( $file->getPathname(), $dest, true ) && count( $state['errors'] ) < 50 ) {
-				$state['errors'][] = 'Could not move ' . $rel . ' into the uploads folder.';
+			if ( ! is_dir( dirname( $dest ) ) || ! $fs->move( $file->getPathname(), $dest, true ) ) {
+				$failed++;
+				if ( count( $state['errors'] ) < 50 ) {
+					$state['errors'][] = 'Could not move ' . $rel . ' into the uploads folder.';
+				}
 			}
 		}
-		$fs->delete( $state['stage'], true );
+		if ( $failed ) {
+			// Keep what couldn't be moved, under a name the clean-up never deletes, and say where.
+			$kept = str_replace( '/livepull-stage-', '/livepull-unplaced-', $stage );
+			$fs->move( $stage, $kept, false );
+			$state['errors'][] = sprintf( '%d file(s) could not be moved into the uploads folder. They are kept in %s: copy them into uploads by hand.', $failed, $kept );
+		} else {
+			$fs->delete( $stage, true );
+		}
+		delete_option( self::PLACING );
 		return true;
+	}
+
+	/**
+	 * Live's CREATE TABLE statement is run here (only its name swapped), so check it is just a
+	 * table definition: one statement, our temporary name, an ordinary storage engine, and no
+	 * options that write files elsewhere, connect to other servers or copy other tables.
+	 *
+	 * @return string Reason it was refused, or '' if it's fine.
+	 */
+	private static function unsafe_create( $sql, $tmp ) {
+		if ( 0 !== strpos( $sql, 'CREATE TABLE `' . $tmp . '` (' ) ) {
+			return 'not a plain CREATE TABLE';
+		}
+		// Look only at the SQL itself: blank out quoted text (defaults, comments) and `names`.
+		$bare = preg_replace( array( "/'(?:[^'\\\\]|\\\\.|'')*'/s", '/"(?:[^"\\\\]|\\\\.)*"/s', '/`[^`]*`/' ), array( "''", '""', '``' ), $sql );
+		if ( false !== strpos( $bare, ';' ) ) {
+			return 'more than one statement';
+		}
+		if ( preg_match( '/\b(DATA|INDEX)\s+DIRECTORY\b|\bCONNECTION\s*=|\bUNION\s*=|\bSELECT\b/i', $bare ) ) {
+			return 'options that reach outside the table';
+		}
+		if ( preg_match_all( '/\bENGINE\s*=\s*([A-Za-z]+)/i', $bare, $m ) ) {
+			foreach ( $m[1] as $engine ) {
+				if ( ! in_array( strtolower( $engine ), array( 'innodb', 'myisam', 'aria', 'memory', 'heap' ), true ) ) {
+					return 'storage engine ' . $engine;
+				}
+			}
+		}
+		return '';
 	}
 
 	private static function tmp_name( $name ) {
@@ -594,6 +764,10 @@ final class LivePull_Full {
 		if ( ! $state['created'] ) {
 			$sql = preg_replace( '/^CREATE TABLE `[^`]+`/i', 'CREATE TABLE `' . $tmp . '`', $t['create'], 1 );
 			$sql = preg_replace( '/\sAUTO_INCREMENT=\d+/i', '', $sql );
+			$why = self::unsafe_create( $sql, $tmp );
+			if ( $why ) {
+				return new WP_Error( 'livepull_create', sprintf( 'Live sent an unexpected definition for table %s (%s), so nothing was changed.', $t['name'], $why ) );
+			}
 			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $tmp ) );
 			// $sql is live's own CREATE TABLE statement (from SHOW CREATE TABLE) with the name swapped for our temporary table.
 			if ( false === $wpdb->query( $sql ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -750,6 +924,14 @@ final class LivePull_Full {
 		}
 		if ( self::cancelled() ) {
 			return new WP_Error( 'livepull_cancelled', 'Cancelled. Nothing on this site was changed.' );
+		}
+		// Note "files still to move" inside the copied options table, so it is part of the
+		// database the instant it switches in: a request that dies right after the switch can
+		// always be resumed, and nothing will mistake the staged files for leftovers.
+		$tmp_options = self::tmp_name( 'options' );
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $tmp_options ) ) ) === $tmp_options ) {
+			$wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE option_name = %s', $tmp_options, self::PLACING ) );
+			$wpdb->insert( $tmp_options, array( 'option_name' => self::PLACING, 'option_value' => $state['stage'], 'autoload' => 'no' ) );
 		}
 		// One statement, so every table switches at the same instant.
 		if ( false === $wpdb->query( 'RENAME TABLE ' . implode( ', ', $renames ) ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table names built above from this site's own table list, each backtick-quoted.

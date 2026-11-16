@@ -73,7 +73,7 @@ final class LivePull_Backup {
 	}
 
 	/** Deny web access (Apache, LiteSpeed, IIS); harmless where the folder isn't web-reachable. */
-	private static function protect( $dir ) {
+	public static function protect( $dir ) {
 		$files = array(
 			'.htaccess'  => "Require all denied\nDeny from all\n",
 			'web.config' => "<?xml version=\"1.0\"?>\n<configuration><system.webServer><authorization><deny users=\"*\" /></authorization></system.webServer></configuration>\n",
@@ -117,11 +117,29 @@ final class LivePull_Backup {
 		return bin2hex( random_bytes( 8 ) );
 	}
 
+	/**
+	 * Backups that have to live inside the website folder are saved as .sql.php files that start
+	 * with this line: requested over the web, PHP runs it and stops, so the contents can't be
+	 * downloaded even on servers that ignore .htaccess (nginx). Restore skips the line.
+	 */
+	const GUARD = "<?php exit; ?>\n";
+
 	private static function new_name( $full, $gz ) {
-		return ( $full ? 'pre-copy-' : 'pre-pull-' ) . gmdate( 'Ymd-His' ) . '-' . self::token() . '.sql' . ( $gz ? '.gz' : '' );
+		$base = ( $full ? 'pre-copy-' : 'pre-pull-' ) . gmdate( 'Ymd-His' ) . '-' . self::token() . '.sql';
+		if ( self::in_web_root() ) {
+			return $base . '.php'; // Uncompressed, so the guard line works.
+		}
+		return $base . ( $gz ? '.gz' : '' );
 	}
 
-	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.sql(\.gz)?$/';
+	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.sql(\.gz|\.php)?$/';
+
+	/** Start a guarded (.php) backup file with its guard line. */
+	private static function guard_file( $file ) {
+		if ( '.php' === substr( $file, -4 ) && ! file_exists( $file ) ) {
+			file_put_contents( $file, self::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		}
+	}
 
 	/** @return string|WP_Error Backup file path. */
 	public static function create( $full = false, $keep = '' ) {
@@ -129,12 +147,23 @@ final class LivePull_Backup {
 
 		if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
 			$file   = $dir . '/' . self::new_name( $full, false );
+			$target = '.php' === substr( $file, -4 ) ? $file . '.part' : $file;
 			$tables = $full ? '' : ' --tables=' . escapeshellarg( implode( ',', self::existing( self::tables( false ) ) ) );
-			$res    = WP_CLI::runcommand( 'db export ' . escapeshellarg( $file ) . $tables . ' --quiet', array( 'return' => 'all', 'exit_error' => false, 'launch' => true ) );
+			$res    = WP_CLI::runcommand( 'db export ' . escapeshellarg( $target ) . $tables . ' --quiet', array( 'return' => 'all', 'exit_error' => false, 'launch' => true ) );
 			if ( 0 === $res->return_code ) {
+				if ( $target !== $file ) {
+					self::guard_file( $file );
+					$in  = fopen( $target, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+					$out = fopen( $file, 'ab' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+					stream_copy_to_stream( $in, $out );
+					fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+					fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+					wp_delete_file( $target );
+				}
 				self::prune( $keep );
 				return $file;
 			}
+			wp_delete_file( $target );
 			// Fall through to the PHP dump (e.g. mysqldump missing).
 		}
 
@@ -175,7 +204,8 @@ final class LivePull_Backup {
 	private static function php_dump( $file, $full = false ) {
 		global $wpdb;
 		$gz = '.gz' === substr( $file, -3 );
-		$fh = $gz ? gzopen( $file, 'wb6' ) : fopen( $file, 'wb' ); // phpcs:ignore
+		self::guard_file( $file );
+		$fh = $gz ? gzopen( $file, 'wb6' ) : fopen( $file, 'ab' ); // phpcs:ignore
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $file ) );
 		}
@@ -224,10 +254,10 @@ final class LivePull_Backup {
 
 	/** Start a backup that's written a few thousand rows at a time across requests. */
 	public static function chunk_start( $full = true ) {
-		$gz = function_exists( 'gzopen' );
+		$file = self::dir() . '/' . self::new_name( $full, function_exists( 'gzopen' ) );
 		return array(
-			'file'   => self::dir() . '/' . self::new_name( $full, $gz ),
-			'gz'     => $gz,
+			'file'   => $file,
+			'gz'     => '.gz' === substr( $file, -3 ),
 			'tables' => self::tables( $full ),
 			'ti'     => 0,
 			'offset' => 0,
@@ -241,6 +271,7 @@ final class LivePull_Backup {
 	 */
 	public static function chunk_step( array &$st, callable $out ) {
 		global $wpdb;
+		self::guard_file( $st['file'] );
 		$fh = $st['gz'] ? gzopen( $st['file'], 'ab6' ) : fopen( $st['file'], 'ab' ); // phpcs:ignore
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
@@ -380,7 +411,7 @@ final class LivePull_Backup {
 			if ( false === $line ) {
 				break;
 			}
-			if ( '' === $buf && ( '' === trim( $line ) || 0 === strpos( $line, '--' ) ) ) {
+			if ( '' === $buf && ( '' === trim( $line ) || 0 === strpos( $line, '--' ) || 0 === strpos( $line, '<?php' ) ) ) {
 				continue;
 			}
 			$buf .= $line;
