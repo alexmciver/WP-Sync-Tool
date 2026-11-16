@@ -52,3 +52,5 @@
 .wpsync-danger { color: #b32d2e !important; margin-top: 4px; }
 .wpsync .notice.inline { margin: 8px 0; }
 @media (max-width: 782px) { .wpsync-status { grid-template-columns: repeat(2, 1fr); } }
+
+.wpsync-version { font-size: 13px; color: #646970; font-weight: 400; margin-left: 4px; }
