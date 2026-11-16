@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.3.3';
+	const VERSION  = '0.4.0';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */

@@ -25,7 +25,7 @@ final class WPSync_Backup {
 	}
 
 	/** @return string|WP_Error Backup file path. */
-	public static function create() {
+	public static function create( $full = false ) {
 		$dir   = self::dir();
 		$stamp = gmdate( 'Ymd-His' );
 
@@ -40,7 +40,7 @@ final class WPSync_Backup {
 		}
 
 		$file = $dir . '/pre-pull-' . $stamp . '.sql' . ( function_exists( 'gzopen' ) ? '.gz' : '' );
-		$res  = self::php_dump( $file );
+		$res  = self::php_dump( $file, $full );
 		if ( is_wp_error( $res ) ) {
 			return $res;
 		}
@@ -48,8 +48,15 @@ final class WPSync_Backup {
 		return $file;
 	}
 
-	private static function tables() {
+	private static function tables( $full = false ) {
 		global $wpdb;
+		if ( $full ) {
+			$all = (array) $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $wpdb->prefix ) . '%' ) );
+			return array_values( array_filter( $all, function ( $t ) use ( $wpdb ) {
+				$n = substr( $t, strlen( $wpdb->prefix ) );
+				return 0 !== strpos( $n, 'wpsynctmp_' ) && 0 !== strpos( $n, 'wpsyncold_' );
+			} ) );
+		}
 		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->users, $wpdb->usermeta, $wpdb->options, WPSync_Config::table() );
 		if ( function_exists( 'wc_get_attribute_taxonomies' ) ) {
 			$tables[] = $wpdb->prefix . 'woocommerce_attribute_taxonomies';
@@ -58,7 +65,7 @@ final class WPSync_Backup {
 		return apply_filters( 'wpsync_backup_tables', $tables );
 	}
 
-	private static function php_dump( $file ) {
+	private static function php_dump( $file, $full = false ) {
 		global $wpdb;
 		$gz = '.gz' === substr( $file, -3 );
 		$fh = $gz ? gzopen( $file, 'wb6' ) : fopen( $file, 'wb' ); // phpcs:ignore
@@ -79,7 +86,7 @@ final class WPSync_Backup {
 		};
 
 		$write( "-- WP Sync pre-pull backup " . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
-		foreach ( self::tables() as $table ) {
+		foreach ( self::tables( $full ) as $table ) {
 			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
 				continue;
 			}
