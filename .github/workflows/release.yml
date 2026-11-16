@@ -59,6 +59,16 @@ jobs:
 
       # Runs for new versions, and when started by hand (Actions → Release → Run workflow),
       # e.g. to publish the current version right after WordPress.org approves the plugin.
+      # Started by hand for a version that's already released: refresh its downloads and notes.
+      - name: Refresh existing GitHub release
+        if: steps.exists.outputs.skip == 'true' && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > notes.txt
+          gh release upload "v${{ steps.v.outputs.version }}" dist/livepull.zip dist/livepull-wordpress-org.zip --clobber
+          [ -s notes.txt ] && gh release edit "v${{ steps.v.outputs.version }}" --notes-file notes.txt
+
       - name: Check for WordPress.org credentials
         id: svn
         if: steps.exists.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
