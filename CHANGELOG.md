@@ -1,63 +1,12 @@
 # Changelog
 
-All notable changes to LivePull (called WP Sync before 1.0). Versions follow [semantic versioning](https://semver.org/); while in 0.x, minor versions may add features and change behaviour.
+All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
-## 1.0.0 – LivePull
-- **New name: LivePull.** WordPress.org doesn't allow "WP" in new plugin names, so WP Sync is now LivePull, ready for the plugin directory. The terminal command is now `wp livepull`.
-- Existing WP Sync installs move over automatically: install LivePull, deactivate WP Sync, and LivePull takes over the connection, change history, links between live and local content, and backups. `WPSYNC_…` settings in wp-config.php keep working. Old `wpsync1:` connection codes are still accepted.
-- Passes WordPress.org's Plugin Check with no errors or warnings: every database query uses placeholders, form input is sanitised, and every action checks its security token.
-- Two downloads: the GitHub one updates itself from GitHub releases; the WordPress.org one is updated by WordPress.org.
-- Tested automatically on every change, on PHP 7.4, 8.0, 8.1, 8.2, 8.3 and 8.4, plus a big-site test (`tests/perf.sh`).
-- Now requires WordPress 6.2 or newer.
-
-## 0.6.1 – tested with real Divi
-- Tested end to end with Divi 4.27.9 installed: Divi pages, images, galleries, buttons and full-width layouts display correctly on local after a pull; Theme Builder, Divi Library and Theme Options come across with *Copy everything*.
-- **Fix:** viewing a Divi page on local could still make WP Sync think you'd edited it (Divi saves extra cache data the first time a page is shown), so the next change from live was held back as a conflict.
-- Test suite can install a theme on both test sites (`WPSYNC_TEST_THEME=Divi.zip`).
-
-## 0.6.0 – tested with popular page builders
-- New end-to-end test suite (`tests/run.sh`): builds a real live and local site with different IDs and table prefixes and checks 162 things across Gutenberg, Elementor, Beaver Builder, SiteOrigin, Spectra, Kadence Blocks, GenerateBlocks, Divi 4/5 content, WooCommerce (simple, variable, attributes), ACF, Yoast, Polylang, menus, conflicts and *Copy everything*.
-- **Fix:** a pull could stop part-way on sites using Beaver Builder (and other plugins that save PHP objects in custom fields). Custom fields are now copied byte-for-byte, with URLs rewritten safely.
-- **Fix:** simply viewing a page on local could make WP Sync think you'd edited it, because plugins (Elementor, Spectra, Kadence, GenerateBlocks, Divi and others) save cache data when a page is displayed. That caused live edits to show up as conflicts. Plugin caches are now ignored.
-- **Fix:** Yoast SEO titles and descriptions now show on local straight after a pull (Yoast's own copy of the data is refreshed).
-- Page builder images and links are re-pointed in more places: Beaver Builder, SiteOrigin, Bricks, Oxygen, Brizy, Spectra, Kadence and GenerateBlocks blocks, Yoast primary category and social images, Rank Math.
-- New WooCommerce product attributes (e.g. Colour) are created locally when needed.
-- New filter `wpsync_ignored_meta_patterns` and actions `wpsync_imported_post` / `wpsync_imported_term`.
-
-## 0.5.1
-- Released as open source under GPL-2.0-or-later.
-- Plugin headers declare requirements (WordPress 5.8+, PHP 7.4+), licence and links.
-- New README, changelog, security policy, contributing guide and issue templates.
-
-## 0.5.0 – security & usability
-- **Security:** backups moved outside the public web folder where possible (one folder per site), with unguessable names and deny rules everywhere else; existing backups are migrated.
-- **Security:** files from live are never written as executable or server-config files; media is only downloaded from the live site or public addresses (private, reserved and cloud-metadata addresses are refused).
-- **Security:** *Copy everything* is off by default on live and can be allowed for 1 hour or always; logged-in sessions are never copied.
-- **Security:** warning when the key would travel over plain HTTP to a public host; updates only installed from GitHub over HTTPS; deleting the plugin removes its settings, log, ID tags and backups.
-- Faster pulls on big sites (lookups built once per request, untagged-content scan throttled).
-- Live tidies its change log daily (180 days by default); local catches up automatically if it falls behind.
-- *Copy everything* backs up the local database in steps, so large databases can't time out.
-- One-paste **connection code**; last pull summary; "What gets pulled?" panel; backup labels; duplicate-install warning.
-
-## 0.4.2
-- Fixed a false "fresh copy" detection when a site was loaded over both http and https, which could make pulls report "nothing to pull".
-- Pulls recover automatically if this site is ever out of step with live's change list.
-- Live shows **Recent changes recorded on this site**.
-
-## 0.4.1
-- Menus (items, order, nesting, links) and menu locations are pulled.
-- Site title, tagline, homepage/posts page, sticky posts, site icon and logo are pulled.
-- Fixed deletions of items with extra data (most pages and menu items) not reaching local.
-
-## 0.4.0
-- **Copy everything from live**: full database + uploads copy with safe URL rewriting, prefix handling, safe cancel and automatic database update.
-
-## 0.3.x
-- Updates from GitHub releases with an **Update now** button (0.3.0–0.3.1); update check shows real errors and falls back to github.com (0.3.3).
-- Existing local pages, media and terms are matched instead of duplicated; **Undo a pull** (0.3.2).
-
-## 0.2.x
-- **Tools → WP Sync** admin screen; works as a normal or must-use plugin; batched pulls with progress, cancel and resume; cache-proof connection; **Pull all content from live**.
-
-## 0.1.0
-- First version: change log on live, `wp sync pull` with conflict detection, ID remapping, media download and backups.
+## 1.0.0
+- First release.
+- Pull new and edited posts, pages, custom post types, media, categories, tags, custom fields, menus and key site settings from a live site into a local copy, without overwriting local work. Items changed in both places are flagged as conflicts.
+- Images and links inside content are pointed at the local copies, including in Gutenberg, Elementor, Divi, Beaver Builder, SiteOrigin, Spectra, Kadence Blocks and GenerateBlocks layouts, WooCommerce products, ACF fields, Yoast SEO and Polylang.
+- Backup before every pull, with one-click undo.
+- *Copy everything*: an exact copy of the live database and uploads, which live must allow first.
+- Tools → LivePull in WordPress, or `wp livepull` in the terminal.
+- Tested end to end on PHP 7.4 to 8.4, including a 10,000-post site.
