@@ -77,10 +77,6 @@ A page cache or firewall on live is answering instead of WordPress. Exclude `/wp
 
 Not yet. WPML and comments aren't supported yet either.
 
-= I used "WP Sync" from GitHub. How do I switch? =
-
-LivePull is the new name for WP Sync. Install LivePull, deactivate WP Sync, then delete it. LivePull takes over WP Sync's connection, history and backups automatically.
-
 == Screenshots ==
 
 1. Pulling changes from live on the local site.
@@ -88,10 +84,9 @@ LivePull is the new name for WP Sync. Install LivePull, deactivate WP Sync, then
 == Changelog ==
 
 = 1.0.0 =
-* First release on WordPress.org. LivePull was previously called "WP Sync" and was available on GitHub. Its full history is in the [changelog on GitHub](https://github.com/alexmciver/WP-Sync-Tool/blob/main/CHANGELOG.md).
-* Existing WP Sync installs are moved over to LivePull automatically.
+* First release.
 
 == Upgrade Notice ==
 
 = 1.0.0 =
-First WordPress.org release. Install it on both your live and local sites.
+First release. Install it on both your live and local sites.

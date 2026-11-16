@@ -200,16 +200,6 @@ tests/perf.sh                        # big-site test
 
 **Duplicate pages after a pull.** Use *Undo a pull or copy* to restore the backup from before that pull, update to the latest version (it matches existing content), and pull again.
 
-**I used the earlier version, called WP Sync. How do I switch?**
-
-LivePull is its new name. On **each** site:
-
-1. Install and activate LivePull. It waits while WP Sync is still switched on.
-2. Deactivate **WP Sync**. LivePull takes over WP Sync's connection, change history, links between live and local content, and backups automatically.
-3. Delete WP Sync.
-
-Settings in `wp-config.php` keep working: `WPSYNC_SECRET` and the other `WPSYNC_…` settings are read as their `LIVEPULL_…` equivalents. Sites on WP Sync 0.6 that click *Update now* get a small placeholder plugin that explains these steps.
-
 ## Contributing
 
 Bug reports and pull requests are welcome – see [CONTRIBUTING.md](CONTRIBUTING.md). Please include your WordPress, PHP and LivePull versions, and what you expected vs what happened.
