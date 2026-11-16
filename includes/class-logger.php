@@ -1,8 +1,13 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
- * Records every content change to the wpsync_log table.
+ * Records every content change to the livepull_log table.
  *
  * On live, the log is the list of things to pull. On local, it records what the
  * developer has changed, so the importer can spot conflicts instead of overwriting.
@@ -10,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
  * Rows only say "this object changed"; the importer always fetches the object's
  * current state, so we don't need to log every individual field change.
  */
-final class WPSync_Logger {
+final class LivePull_Logger {
 
 	private static $suspended = 0;
 	private static $seen      = array();
@@ -64,14 +69,14 @@ final class WPSync_Logger {
 
 	public static function stamp_post( $post_id ) {
 		if ( ! self::$suspended ) {
-			WPSync_Ids::for_post( $post_id );
+			LivePull_Ids::for_post( $post_id );
 		}
 	}
 
 	private static function post_loggable( $post ) {
 		return $post
 			&& 'auto-draft' !== $post->post_status
-			&& WPSync_Config::post_type_ok( $post->post_type );
+			&& LivePull_Config::post_type_ok( $post->post_type );
 	}
 
 	public static function touch_post( $post_id ) {
@@ -82,7 +87,7 @@ final class WPSync_Logger {
 		if ( ! self::post_loggable( $post ) ) {
 			return;
 		}
-		$sid = WPSync_Ids::for_post( $post->ID );
+		$sid = LivePull_Ids::for_post( $post->ID );
 		self::write( 'post', $sid, $post->ID, 'upsert' );
 	}
 
@@ -94,48 +99,48 @@ final class WPSync_Logger {
 		if ( ! self::post_loggable( $post ) ) {
 			return;
 		}
-		$sid = WPSync_Ids::for_post( $post->ID, false ) ?: WPSync_Ids::post_formula( $post->ID, $post->post_type, $post->post_date );
+		$sid = LivePull_Ids::for_post( $post->ID, false ) ?: LivePull_Ids::post_formula( $post->ID, $post->post_type, $post->post_date );
 		self::$deleting[ 'post:' . (int) $post->ID ] = true;
 		self::write( 'post', $sid, $post->ID, 'delete' );
 	}
 
 	public static function post_meta_changed( $meta_id, $object_id, $meta_key ) {
-		if ( self::$suspended || WPSync_Config::is_ignored_meta( $meta_key ) ) {
+		if ( self::$suspended || LivePull_Config::is_ignored_meta( $meta_key ) ) {
 			return;
 		}
 		self::touch_post( $object_id );
 	}
 
 	public static function dedupe_post_id( $meta_id, $object_id, $meta_key, $value ) {
-		if ( WPSync_Config::META_KEY !== $meta_key || self::$suspended ) {
+		if ( LivePull_Config::META_KEY !== $meta_key || self::$suspended ) {
 			return;
 		}
 		global $wpdb;
 		$other = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s AND post_id <> %d LIMIT 1",
-				WPSync_Config::META_KEY,
+				LivePull_Config::META_KEY,
 				$value,
 				$object_id
 			)
 		);
 		if ( $other ) {
-			$wpdb->update( $wpdb->postmeta, array( 'meta_value' => WPSync_Ids::fresh_id( 'post', $object_id, $value ) ), array( 'meta_id' => $meta_id ) );
+			$wpdb->update( $wpdb->postmeta, array( 'meta_value' => LivePull_Ids::fresh_id( 'post', $object_id, $value ) ), array( 'meta_id' => $meta_id ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 			wp_cache_delete( $object_id, 'post_meta' );
 		}
 	}
 
 	public static function duplicate_post_exclude( $list ) {
 		$list   = is_array( $list ) ? $list : array();
-		$list[] = WPSync_Config::META_KEY;
+		$list[] = LivePull_Config::META_KEY;
 		return $list;
 	}
 
 	/* -------------------------------------------------------------- Options */
 
 	public static function option_added( $name, $value ) {
-		if ( ! self::$suspended && null !== WPSync_Config::option_spec( $name ) ) {
-			self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'upsert' );
+		if ( ! self::$suspended && null !== LivePull_Config::option_spec( $name ) ) {
+			self::write( 'option', LivePull_Config::option_sid( $name ), 0, 'upsert' );
 		}
 	}
 
@@ -143,7 +148,7 @@ final class WPSync_Logger {
 		if ( self::$suspended ) {
 			return;
 		}
-		$spec = WPSync_Config::option_spec( $name );
+		$spec = LivePull_Config::option_spec( $name );
 		if ( null === $spec ) {
 			return;
 		}
@@ -161,12 +166,12 @@ final class WPSync_Logger {
 				return;
 			}
 		}
-		self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'upsert' );
+		self::write( 'option', LivePull_Config::option_sid( $name ), 0, 'upsert' );
 	}
 
 	public static function option_deleted( $name ) {
-		if ( ! self::$suspended && true === WPSync_Config::option_spec( $name ) ) {
-			self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'delete' );
+		if ( ! self::$suspended && true === LivePull_Config::option_spec( $name ) ) {
+			self::write( 'option', LivePull_Config::option_sid( $name ), 0, 'delete' );
 		}
 	}
 
@@ -174,7 +179,7 @@ final class WPSync_Logger {
 
 	public static function stamp_term( $term_id ) {
 		if ( ! self::$suspended ) {
-			WPSync_Ids::for_term( $term_id );
+			LivePull_Ids::for_term( $term_id );
 		}
 	}
 
@@ -183,10 +188,10 @@ final class WPSync_Logger {
 			return;
 		}
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! WPSync_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
 			return;
 		}
-		self::write( 'term', WPSync_Ids::for_term( $term->term_id ), $term->term_id, 'upsert' );
+		self::write( 'term', LivePull_Ids::for_term( $term->term_id ), $term->term_id, 'upsert' );
 	}
 
 	public static function delete_term( $term_id ) {
@@ -194,16 +199,16 @@ final class WPSync_Logger {
 			return;
 		}
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! WPSync_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
 			return;
 		}
-		$sid = WPSync_Ids::for_term( $term->term_id, false ) ?: WPSync_Ids::term_formula( $term->term_id, $term->taxonomy, $term->slug );
+		$sid = LivePull_Ids::for_term( $term->term_id, false ) ?: LivePull_Ids::term_formula( $term->term_id, $term->taxonomy, $term->slug );
 		self::$deleting[ 'term:' . (int) $term->term_id ] = true;
 		self::write( 'term', $sid, $term->term_id, 'delete' );
 	}
 
 	public static function term_meta_changed( $meta_id, $object_id, $meta_key ) {
-		if ( self::$suspended || WPSync_Config::is_ignored_meta( $meta_key ) ) {
+		if ( self::$suspended || LivePull_Config::is_ignored_meta( $meta_key ) ) {
 			return;
 		}
 		self::touch_term( $object_id );
@@ -227,11 +232,11 @@ final class WPSync_Logger {
 	/** Also used by the importer to record "synced" markers. */
 	public static function insert( $type, $sid, $object_id, $action, $source ) {
 		global $wpdb;
-		if ( get_option( 'wpsync_version' ) !== WPSync_Config::VERSION ) {
-			WPSync_Config::install();
+		if ( get_option( 'livepull_version' ) !== LivePull_Config::VERSION ) {
+			LivePull_Config::install();
 		}
 		$wpdb->insert(
-			WPSync_Config::table(),
+			LivePull_Config::table(),
 			array(
 				'object_type' => $type,
 				'sync_id'     => $sid,

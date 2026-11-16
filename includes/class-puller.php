@@ -1,6 +1,11 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * The pull workflow, shared by the WP admin screen and WP-CLI.
  *
@@ -8,17 +13,17 @@ defined( 'ABSPATH' ) || exit;
  * time limits from the browser, and can resume where it stopped: the cursor is saved
  * after every page.
  */
-final class WPSync_Puller {
+final class LivePull_Puller {
 
-	const LOCK = 'wpsync_lock';
+	const LOCK = 'livepull_lock';
 
 	public static function client() {
-		return new WPSync_Client( WPSync_Config::remote(), WPSync_Config::remote_secret() );
+		return new LivePull_Client( LivePull_Config::remote(), LivePull_Config::remote_secret() );
 	}
 
 	/** http:// to a public host (local dev domains and private networks are fine). */
 	public static function insecure_remote() {
-		$url = WPSync_Config::remote();
+		$url = LivePull_Config::remote();
 		if ( 'http' !== strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) ) {
 			return false;
 		}
@@ -52,60 +57,60 @@ final class WPSync_Puller {
 	public static function connect( &$notices = array(), $allow_remote_change = false ) {
 		$notices = array();
 		if ( is_multisite() ) {
-			return new WP_Error( 'wpsync_multisite', 'Multisite networks are not supported yet.' );
+			return new WP_Error( 'livepull_multisite', 'Multisite networks are not supported yet.' );
 		}
-		if ( ! WPSync_Config::remote() ) {
-			return new WP_Error( 'wpsync_no_remote', 'Add the live site URL and key first.' );
+		if ( ! LivePull_Config::remote() ) {
+			return new WP_Error( 'livepull_no_remote', 'Add the live site URL and key first.' );
 		}
-		if ( strlen( WPSync_Config::remote_secret() ) < 32 ) {
-			return new WP_Error( 'wpsync_no_secret', 'The key must be at least 32 characters and match the one on the live site.' );
+		if ( strlen( LivePull_Config::remote_secret() ) < 32 ) {
+			return new WP_Error( 'livepull_no_secret', 'The key must be at least 32 characters and match the one on the live site.' );
 		}
 		if ( self::insecure_remote() ) {
-			$notices[] = 'The live site URL starts with http://, so the WP Sync key and your content travel unencrypted. Use https:// if the live site supports it.';
+			$notices[] = 'The live site URL starts with http://, so the LivePull key and your content travel unencrypted. Use https:// if the live site supports it.';
 		}
 		$remote = self::client()->get( 'status' );
 		if ( is_wp_error( $remote ) ) {
 			$hint = '';
 			if ( 'Invalid sync key.' === $remote->get_error_message() ) {
-				list( $k, $from ) = WPSync_Config::remote_secret_source();
-				return new WP_Error( 'wpsync_bad_key', sprintf(
-					'Live rejected the key. This site is using the key ending %s, from %s. On live, open Tools → WP Sync, click Show, and check it ends the same. If not, copy it and paste it under Connection here.',
-					WPSync_Config::key_hint( $k ),
+				list( $k, $from ) = LivePull_Config::remote_secret_source();
+				return new WP_Error( 'livepull_bad_key', sprintf(
+					'Live rejected the key. This site is using the key ending %s, from %s. On live, open Tools → LivePull, click Show, and check it ends the same. If not, copy it and paste it under Connection here.',
+					LivePull_Config::key_hint( $k ),
 					$from
 				) );
 			}
 			$code = (int) ( is_array( $remote->get_error_data() ) && isset( $remote->get_error_data()['status'] ) ? $remote->get_error_data()['status'] : 0 );
 			if ( in_array( $code, array( 401, 403 ), true ) && 'Invalid sync key.' !== $remote->get_error_message() ) {
-				$hint = ' A firewall or security plugin on live may be blocking the request (allow ?rest_route=/wpsync/v1/).';
+				$hint = ' A firewall or security plugin on live may be blocking the request (allow ?rest_route=/livepull/v1/).';
 			} elseif ( 404 === $code && false === strpos( $remote->get_error_message(), 'mu-plugins' ) ) {
-				$hint = ' Is WP Sync installed in wp-content/mu-plugins on the live site?';
+				$hint = ' Is LivePull installed in wp-content/mu-plugins on the live site?';
 			}
-			return new WP_Error( 'wpsync_unreachable', 'Could not reach live: ' . $remote->get_error_message() . $hint );
+			return new WP_Error( 'livepull_unreachable', 'Could not reach live: ' . $remote->get_error_message() . $hint );
 		}
 
 		$host = function ( $u ) {
 			return strtolower( preg_replace( '#^www\.#', '', (string) wp_parse_url( $u, PHP_URL_HOST ) ) . ':' . (string) wp_parse_url( $u, PHP_URL_PORT ) . (string) wp_parse_url( untrailingslashit( $u ), PHP_URL_PATH ) );
 		};
 		if ( $host( $remote['home'] ) === $host( home_url() ) ) {
-			return new WP_Error( 'wpsync_self', 'The live site URL points at this same site. Only pull into a local or staging copy.' );
+			return new WP_Error( 'livepull_self', 'The live site URL points at this same site. Only pull into a local or staging copy.' );
 		}
 
-		if ( isset( $remote['site_key'] ) && $remote['site_key'] === WPSync_Config::site_key() ) {
-			WPSync_Config::mark_as_clone();
+		if ( isset( $remote['site_key'] ) && $remote['site_key'] === LivePull_Config::site_key() ) {
+			LivePull_Config::mark_as_clone();
 		}
-		if ( $detected = get_option( 'wpsync_clone_detected' ) ) {
+		if ( $detected = get_option( 'livepull_clone_detected' ) ) {
 			$notices[] = "This database is a fresh copy of live (detected {$detected} UTC). Pulls start from the moment it was copied.";
-			delete_option( 'wpsync_clone_detected' );
+			delete_option( 'livepull_clone_detected' );
 		}
-		if ( version_compare( $remote['version'], WPSync_Config::VERSION, '!=' ) ) {
-			$notices[] = "WP Sync versions differ (live {$remote['version']}, this site " . WPSync_Config::VERSION . '). Keep them the same.';
+		if ( version_compare( $remote['version'], LivePull_Config::VERSION, '!=' ) ) {
+			$notices[] = "LivePull versions differ (live {$remote['version']}, this site " . LivePull_Config::VERSION . '). Keep them the same.';
 		}
-		$stored = get_option( 'wpsync_remote_home' );
+		$stored = get_option( 'livepull_remote_home' );
 		if ( $stored && $stored !== $remote['home'] && ! $allow_remote_change ) {
-			return new WP_Error( 'wpsync_remote_changed', "Last pull was from {$stored}, but the live URL is now {$remote['home']}. Use catch-up mode (pick a date) to start fresh." );
+			return new WP_Error( 'livepull_remote_changed', "Last pull was from {$stored}, but the live URL is now {$remote['home']}. Use catch-up mode (pick a date) to start fresh." );
 		}
-		if ( ! get_option( 'wpsync_full_synced' ) && ! get_option( 'wpsync_clone_floor' ) && ! get_option( 'wpsync_last_pull' ) ) {
-			$notices[] = 'First time? A normal pull only brings changes made on live since WP Sync was installed there. To bring across everything that already differs, tick "Pull all content from live" under More options.';
+		if ( ! get_option( 'livepull_full_synced' ) && ! get_option( 'livepull_clone_floor' ) && ! get_option( 'livepull_last_pull' ) ) {
+			$notices[] = 'First time? A normal pull only brings changes made on live since LivePull was installed there. To bring across everything that already differs, tick "Pull all content from live" under More options.';
 		}
 		return $remote;
 	}
@@ -118,7 +123,7 @@ final class WPSync_Puller {
 		$opts  = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'since' => '', 'from' => null, 'skip_backup' => false, 'redownload' => false, 'url_replace' => true, 'force' => false ) );
 		$since = trim( (string) $opts['since'] );
 		if ( '' !== $since && ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $since ) ) {
-			return new WP_Error( 'wpsync_bad_date', 'Catch-up date must be YYYY-MM-DD.' );
+			return new WP_Error( 'livepull_bad_date', 'Catch-up date must be YYYY-MM-DD.' );
 		}
 
 		$notices = array();
@@ -130,21 +135,21 @@ final class WPSync_Puller {
 		if ( ! $opts['dry_run'] ) {
 			$lock = get_transient( self::LOCK );
 			if ( $lock && ! $opts['force'] ) {
-				return new WP_Error( 'wpsync_locked', 'Another pull is already running (started ' . human_time_diff( (int) $lock ) . ' ago). It unlocks automatically after 15 minutes of inactivity.' );
+				return new WP_Error( 'livepull_locked', 'Another pull is already running (started ' . human_time_diff( (int) $lock ) . ' ago). It unlocks automatically after 15 minutes of inactivity.' );
 			}
 			set_transient( self::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		}
 
-		WPSync_Ids::maybe_backfill();
-		WPSync_Importer::reset_cache();
+		LivePull_Ids::maybe_backfill();
+		LivePull_Importer::reset_cache();
 
 		// Safety net: our position in live's change list is beyond live's newest change
 		// (live restored from a backup, or a mistaken copy detection). Rather than say
 		// "nothing to pull", check everything changed on live since the last pull.
-		$cursor_now = (int) get_option( 'wpsync_cursor', 0 );
+		$cursor_now = (int) get_option( 'livepull_cursor', 0 );
 		$behind     = $cursor_now > 0 && ! empty( $remote['min_id'] ) && $cursor_now < (int) $remote['min_id'] - 1;
 		if ( '' === $since && null === $opts['from'] && ( $cursor_now > (int) $remote['last_id'] || $behind ) ) {
-			$last  = get_option( 'wpsync_last_pull' );
+			$last  = get_option( 'livepull_last_pull' );
 			$since = $last ? gmdate( 'Y-m-d', strtotime( $last . ' UTC' ) - DAY_IN_SECONDS ) : '1970-01-01';
 			$notices[] = $behind
 				? "It's been a while since the last pull and live has tidied away its older change history, so this pull checks everything changed on live since {$since}."
@@ -155,7 +160,7 @@ final class WPSync_Puller {
 			'remote'  => $remote,
 			'mode'    => '' !== $since ? 'scan' : 'changes',
 			'since'   => $since,
-			'after'   => '' !== $since ? 0 : ( null !== $opts['from'] ? (int) $opts['from'] : (int) get_option( 'wpsync_cursor', 0 ) ),
+			'after'   => '' !== $since ? 0 : ( null !== $opts['from'] ? (int) $opts['from'] : (int) get_option( 'livepull_cursor', 0 ) ),
 			'opts'    => $opts,
 			'backup'  => ( ! $opts['dry_run'] && ! $opts['skip_backup'] ),
 			'backup_file' => '',
@@ -194,7 +199,7 @@ final class WPSync_Puller {
 				$client = self::client();
 				while ( $state['downloads'] && ! $out() ) {
 					$f    = array_shift( $state['downloads'] );
-					$dest = WPSync_Importer::safe_dest( $f['path'] );
+					$dest = LivePull_Importer::safe_dest( $f['path'] );
 					$state['activity'] = sprintf( 'Downloading media %d of %d', $state['dl_done'] + 1, $state['dl_total'] );
 					if ( $dest && ( ! file_exists( $dest ) || $state['opts']['redownload'] ) ) {
 						$res = $client->download( $f['url'], $dest );
@@ -215,7 +220,7 @@ final class WPSync_Puller {
 			// 2. Import the current page a few items at a time.
 			if ( $state['pending'] ) {
 				$chunk    = array_splice( $state['pending'], 0, 10 );
-				$importer = new WPSync_Importer( self::client(), $state['remote'], array(
+				$importer = new LivePull_Importer( self::client(), $state['remote'], array(
 					'dry_run'     => $dry,
 					'theirs'      => (bool) $state['opts']['theirs'],
 					'redownload'  => (bool) $state['opts']['redownload'],
@@ -255,14 +260,14 @@ final class WPSync_Puller {
 
 			// 4. Fetch the next page.
 			$state['activity'] = 'Asking live for changes…';
-			$params = array( 'after' => $state['after'], 'limit' => WPSync_Config::page_size() );
+			$params = array( 'after' => $state['after'], 'limit' => LivePull_Config::page_size() );
 			if ( 'scan' === $state['mode'] ) {
 				$params['since'] = $state['since'];
 			}
 			$res = self::client()->get( $state['mode'], $params );
 			if ( is_wp_error( $res ) ) {
 				self::unlock( $state );
-				return new WP_Error( 'wpsync_fetch', 'Fetching changes from live failed: ' . $res->get_error_message() . ( $state['page'] ? ' Progress so far is saved; pull again to continue.' : '' ) );
+				return new WP_Error( 'livepull_fetch', 'Fetching changes from live failed: ' . $res->get_error_message() . ( $state['page'] ? ' Progress so far is saved; pull again to continue.' : '' ) );
 			}
 			$state['page']++;
 			$state['page_open']     = true;
@@ -271,15 +276,15 @@ final class WPSync_Puller {
 			if ( ! empty( $res['items'] ) ) {
 				if ( $state['backup'] ) {
 					$state['activity'] = 'Backing up the local database…';
-					$file = WPSync_Backup::create();
+					$file = LivePull_Backup::create();
 					if ( is_wp_error( $file ) ) {
 						self::unlock( $state );
-						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+						return new WP_Error( 'livepull_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
 					}
 					$state['backup']      = false;
 					$state['backup_file'] = $file;
 				}
-				$state['pending'] = WPSync_Importer::sort_items( $res['items'] );
+				$state['pending'] = LivePull_Importer::sort_items( $res['items'] );
 			}
 			if ( $out() ) {
 				break;
@@ -306,9 +311,9 @@ final class WPSync_Puller {
 			if ( 'scan' === $state['mode'] ) {
 				self::save_cursor( (int) $state['remote']['last_id'], $state['remote'] );
 			}
-			update_option( 'wpsync_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
+			update_option( 'livepull_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
 			$r = $state['report'];
-			update_option( 'wpsync_last_summary', array(
+			update_option( 'livepull_last_summary', array(
 				'created'   => count( $r['created'] ),
 				'updated'   => count( $r['updated'] ),
 				'deleted'   => count( $r['deleted'] ),
@@ -317,7 +322,7 @@ final class WPSync_Puller {
 				'errors'    => count( $r['errors'] ),
 			), false );
 			if ( 'scan' === $state['mode'] && $state['since'] <= '2000-01-01' ) {
-				update_option( 'wpsync_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
+				update_option( 'livepull_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
 			}
 			self::after_pull( $state['report'] );
 		}
@@ -342,23 +347,23 @@ final class WPSync_Puller {
 		if ( function_exists( 'wc_update_product_lookup_tables' ) && ( $report['created'] || $report['updated'] ) ) {
 			wc_update_product_lookup_tables();
 		}
-		do_action( 'wpsync_after_pull', $report );
+		do_action( 'livepull_after_pull', $report );
 	}
 
 	public static function save_cursor( $cursor, array $remote ) {
-		update_option( 'wpsync_cursor', (int) $cursor, false );
-		update_option( 'wpsync_remote_home', $remote['home'], false );
+		update_option( 'livepull_cursor', (int) $cursor, false );
+		update_option( 'livepull_remote_home', $remote['home'], false );
 	}
 
 	/* ============================================================ Conflicts */
 
 	public static function conflicts() {
-		return (array) get_option( 'wpsync_conflicts', array() );
+		return (array) get_option( 'livepull_conflicts', array() );
 	}
 
 	public static function store_conflicts( array $report ) {
 		$stored  = self::conflicts();
-		$changed = WPSync_Importer::locally_changed();
+		$changed = LivePull_Importer::locally_changed();
 		foreach ( array_keys( $stored ) as $key ) {
 			if ( ! isset( $changed[ $key ] ) ) {
 				unset( $stored[ $key ] ); // Pulled since, so no longer in conflict.
@@ -368,20 +373,20 @@ final class WPSync_Puller {
 			$c['when']      = gmdate( 'Y-m-d H:i' );
 			$stored[ $key ] = $c;
 		}
-		update_option( 'wpsync_conflicts', $stored, false );
+		update_option( 'livepull_conflicts', $stored, false );
 	}
 
 	public static function forget_conflict( $key ) {
 		$stored = self::conflicts();
 		unset( $stored[ $key ] );
-		update_option( 'wpsync_conflicts', $stored, false );
+		update_option( 'livepull_conflicts', $stored, false );
 	}
 
 	/** Overwrite one local item with live's version. @return array|WP_Error report */
 	public static function take( $key ) {
 		list( $kind, $sid ) = array_pad( explode( ':', (string) $key, 2 ), 2, '' );
 		if ( ! in_array( $kind, array( 'post', 'term', 'option' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
-			return new WP_Error( 'wpsync_bad_key', 'Unknown item.' );
+			return new WP_Error( 'livepull_bad_key', 'Unknown item.' );
 		}
 		$notices = array();
 		$remote  = self::connect( $notices, true );
@@ -390,14 +395,14 @@ final class WPSync_Puller {
 		}
 		$obj = self::client()->get( 'object', array( 'type' => $kind, 'id' => $sid ) );
 		if ( is_wp_error( $obj ) ) {
-			return new WP_Error( 'wpsync_gone', 'Could not fetch it from live (' . $obj->get_error_message() . '). If it was deleted on live, delete it here too, then choose "Keep mine" to dismiss.' );
+			return new WP_Error( 'livepull_gone', 'Could not fetch it from live (' . $obj->get_error_message() . '). If it was deleted on live, delete it here too, then choose "Keep mine" to dismiss.' );
 		}
-		$file = WPSync_Backup::create();
+		$file = LivePull_Backup::create();
 		if ( is_wp_error( $file ) ) {
 			return $file;
 		}
-		WPSync_Importer::reset_cache();
-		$importer = new WPSync_Importer( self::client(), $remote, array( 'force' => array( $key ) ) );
+		LivePull_Importer::reset_cache();
+		$importer = new LivePull_Importer( self::client(), $remote, array( 'force' => array( $key ) ) );
 		$report   = $importer->run( array( $obj ) );
 		self::forget_conflict( $key );
 		self::store_conflicts( $report );
@@ -414,19 +419,19 @@ final class WPSync_Puller {
 		if ( preg_match( '/^[a-f0-9]{32}$/', $arg ) ) {
 			return $kind . ':' . $arg;
 		}
-		$sid = 'post' === $kind ? WPSync_Ids::for_post( (int) $arg, false ) : WPSync_Ids::for_term( (int) $arg, false );
-		return $sid ? $kind . ':' . $sid : new WP_Error( 'wpsync_unknown', "No synced {$kind} with ID {$arg} on this site." );
+		$sid = 'post' === $kind ? LivePull_Ids::for_post( (int) $arg, false ) : LivePull_Ids::for_term( (int) $arg, false );
+		return $sid ? $kind . ':' . $sid : new WP_Error( 'livepull_unknown', "No synced {$kind} with ID {$arg} on this site." );
 	}
 
 	/** Rows describing everything changed on this site since it was last pulled. */
 	public static function local_changes() {
-		$pm   = WPSync_Ids::map( 'post' );
-		$tm   = WPSync_Ids::map( 'term' );
+		$pm   = LivePull_Ids::map( 'post' );
+		$tm   = LivePull_Ids::map( 'term' );
 		$rows = array();
-		foreach ( WPSync_Importer::locally_changed() as $key => $action ) {
+		foreach ( LivePull_Importer::locally_changed() as $key => $action ) {
 			list( $type, $sid ) = explode( ':', $key, 2 );
 			if ( 'option' === $type ) {
-				$n      = WPSync_Importer::option_name( $sid );
+				$n      = LivePull_Importer::option_name( $sid );
 				$rows[] = array( 'id' => 0, 'item' => 0 === strpos( $n, 'theme_mods_' ) ? 'setting "Menu locations / logo"' : 'setting "' . $n . '"', 'action' => 'edited', 'edit' => '' );
 				continue;
 			}

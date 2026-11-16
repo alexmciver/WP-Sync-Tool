@@ -12,7 +12,7 @@ defined( 'ABSPATH' ) || exit;
  * shortcode, WooCommerce, ACF, Divi galleries and Elementor. Anything else can be
  * added with the filters documented below.
  */
-final class WPSync_Refs {
+final class LivePull_Refs {
 
 	/**
 	 * Meta keys whose values hold IDs. Returns [ meta_key => 'post'|'term' ].
@@ -86,14 +86,14 @@ final class WPSync_Refs {
 		/**
 		 * Add your own ID-holding meta keys.
 		 *
-		 * add_filter( 'wpsync_meta_ref_keys', function ( $keys, $meta, $object_type ) {
+		 * add_filter( 'livepull_meta_ref_keys', function ( $keys, $meta, $object_type ) {
 		 *     if ( 'post' === $object_type && isset( $meta['hero_image_id'] ) ) {
 		 *         $keys['hero_image_id'] = 'post';
 		 *     }
 		 *     return $keys;
 		 * }, 10, 3 );
 		 */
-		return apply_filters( 'wpsync_meta_ref_keys', $keys, $meta, $object_type, $object_id );
+		return apply_filters( 'livepull_meta_ref_keys', $keys, $meta, $object_type, $object_id );
 	}
 
 	private static function acf_ref_kind( $field_key ) {
@@ -117,7 +117,7 @@ final class WPSync_Refs {
 
 	/** Meta keys that hold page-builder content with embedded IDs (rewritten like post_content). */
 	public static function content_meta_keys() {
-		return apply_filters( 'wpsync_content_meta_keys', array(
+		return apply_filters( 'livepull_content_meta_keys', array(
 			'_elementor_data', '_elementor_page_settings',      // Elementor
 			'_fl_builder_data', '_fl_builder_draft',            // Beaver Builder
 			'panels_data',                                       // SiteOrigin Page Builder
@@ -212,13 +212,13 @@ final class WPSync_Refs {
 		/**
 		 * Rewrite your own ID formats.
 		 *
-		 * add_filter( 'wpsync_walk_content', function ( $content, $cb, $field ) {
+		 * add_filter( 'livepull_walk_content', function ( $content, $cb, $field ) {
 		 *     return preg_replace_callback( '/\[my_banner id="(\d+)"/', function ( $m ) use ( $cb ) {
 		 *         return '[my_banner id="' . $cb( 'post', (int) $m[1] ) . '"';
 		 *     }, $content );
 		 * }, 10, 3 );
 		 */
-		return apply_filters( 'wpsync_walk_content', $content, $cb, $field );
+		return apply_filters( 'livepull_walk_content', $content, $cb, $field );
 	}
 
 	/** Gutenberg block comment attributes. */
@@ -227,7 +227,7 @@ final class WPSync_Refs {
 			return $content;
 		}
 		$attr_map = apply_filters(
-			'wpsync_block_id_attributes',
+			'livepull_block_id_attributes',
 			array(
 				'image'      => array( 'id' => 'post' ),
 				'cover'      => array( 'id' => 'post' ),
@@ -406,7 +406,7 @@ final class WPSync_Refs {
 
 	/** Polylang keeps translation groups as serialized ID maps in term descriptions. */
 	public static function description_kind( $taxonomy ) {
-		$kinds = apply_filters( 'wpsync_description_id_maps', array( 'post_translations' => 'post', 'term_translations' => 'term' ) );
+		$kinds = apply_filters( 'livepull_description_id_maps', array( 'post_translations' => 'post', 'term_translations' => 'term' ) );
 		return isset( $kinds[ $taxonomy ] ) ? $kinds[ $taxonomy ] : null;
 	}
 }

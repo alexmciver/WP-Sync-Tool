@@ -1,0 +1,67 @@
+.livepull { max-width: 980px; }
+.livepull-lead { font-size: 14px; color: #50575e; margin-top: 4px; }
+.livepull-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.livepull-card { background: #fff; border: 1px solid #dcdcde; border-radius: 8px; padding: 20px 24px; margin: 16px 0; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.livepull-grid .livepull-card { margin: 0; }
+.livepull-card h2 { margin: 0 0 8px; font-size: 16px; }
+.livepull-card summary { cursor: pointer; list-style: none; }
+.livepull-card summary::-webkit-details-marker { display: none; }
+.livepull-card summary h2 { display: inline-block; margin: 0; }
+.livepull-card summary::before { content: "▸"; display: inline-block; width: 1.2em; color: #8c8f94; transition: transform .15s; }
+.livepull-card details[open] > summary::before { transform: rotate(90deg); }
+.livepull-card details[open] > summary { margin-bottom: 12px; }
+.livepull-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.livepull-remote { color: #50575e; font-family: Consolas, Monaco, monospace; font-size: 13px; }
+
+.livepull-status { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; min-height: 64px; }
+.livepull-status.is-loading, .livepull-status.is-error { display: flex; align-items: center; gap: 6px; color: #50575e; }
+.livepull-status.is-loading .spinner { float: none; margin: 0; }
+.livepull-status.is-error { color: #b32d2e; background: #fcf0f1; border-radius: 6px; padding: 12px 16px; }
+.livepull-stat { background: #f6f7f7; border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; }
+.livepull-stat-value { font-size: 22px; font-weight: 600; line-height: 1.2; color: #1d2327; }
+.livepull-stat-label { color: #646970; font-size: 12px; margin-top: 2px; }
+.livepull-stat.is-hot { background: #edfaef; } .livepull-stat.is-hot .livepull-stat-value { color: #008a20; }
+.livepull-stat.is-warn { background: #fcf9e8; } .livepull-stat.is-warn .livepull-stat-value { color: #996800; }
+
+.livepull-actions { display: flex; gap: 10px; margin: 8px 0 12px; }
+.livepull-advanced { margin: 4px 0 8px; }
+.livepull-advanced summary { color: #2271b1; }
+.livepull-advanced summary::before { content: none; }
+
+.livepull-progress { margin: 16px 0; }
+.livepull-bar { height: 8px; background: #f0f0f1; border-radius: 4px; overflow: hidden; }
+.livepull-bar span { display: block; height: 100%; width: 0; background: #2271b1; transition: width .3s; }
+.livepull-progress-text { color: #50575e; margin: 6px 0 0; }
+
+.livepull-summary { padding: 12px 16px; border-radius: 6px; margin: 12px 0; }
+.livepull-summary.is-ok { background: #edfaef; }
+.livepull-summary.is-error { background: #fcf0f1; }
+.livepull-list details { margin: 6px 0; }
+.livepull-list summary { cursor: pointer; font-weight: 600; }
+.livepull-list ul { margin: 6px 0 0 20px; list-style: disc; max-height: 280px; overflow: auto; }
+.livepull-list.is-warn summary { color: #996800; }
+.livepull-list.is-error summary { color: #b32d2e; }
+
+.livepull-table { margin-top: 8px; }
+.livepull-row-actions { white-space: nowrap; text-align: right; }
+.livepull-table tr.is-resolved td { opacity: .6; }
+.livepull-empty { color: #646970; }
+.livepull-copy { display: flex; gap: 6px; align-items: center; max-width: 100%; }
+.livepull-copy input { flex: 1; min-width: 0; }
+.livepull-row-actions .livepull-keep { margin-left: 8px; }
+.livepull-danger { color: #b32d2e !important; margin-top: 4px; }
+.livepull .notice.inline { margin: 8px 0; }
+@media (max-width: 782px) { .livepull-status { grid-template-columns: repeat(2, 1fr); } }
+
+.livepull-version { font-size: 13px; color: #646970; font-weight: 400; margin-left: 4px; }
+.livepull-bullets { list-style: disc; margin-left: 20px; }
+.livepull-inline-form { margin: 12px 0; }
+.livepull-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #f0f0f1; color: #50575e; font-size: 12px; margin-left: 4px; }
+.livepull-pill.is-on { background: #edfaef; color: #008a20; }
+.livepull-perm-buttons { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.livepull-what-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+.livepull-what-grid ul { margin-top: 4px; }
+.livepull-sub { margin: 8px 0; }
+.livepull-sub summary { cursor: pointer; color: #2271b1; }
+.livepull-sub summary::before { content: none !important; }
+@media (max-width: 782px) { .livepull-what-grid { grid-template-columns: 1fr; } }

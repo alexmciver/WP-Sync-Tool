@@ -1,6 +1,6 @@
 <?php
 // Elementor: _elementor_data JSON (image, gallery, section background, links) + page settings.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 if ( ! t_needs( 'elementor/elementor.php', 'Elementor' ) ) {
 	return;

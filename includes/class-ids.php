@@ -1,6 +1,11 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Stable cross-site IDs.
  *
@@ -13,7 +18,7 @@ defined( 'ABSPATH' ) || exit;
  * Content created later gets its own value, which is unique in practice because it
  * includes the creation timestamp.
  */
-final class WPSync_Ids {
+final class LivePull_Ids {
 
 	public static function post_formula( $id, $type, $date ) {
 		return md5( 'post|' . (int) $id . '|' . $type . '|' . $date );
@@ -28,7 +33,7 @@ final class WPSync_Ids {
 		if ( $post_id <= 0 ) {
 			return null;
 		}
-		$sid = get_post_meta( $post_id, WPSync_Config::META_KEY, true );
+		$sid = get_post_meta( $post_id, LivePull_Config::META_KEY, true );
 		if ( $sid ) {
 			return $sid;
 		}
@@ -40,8 +45,8 @@ final class WPSync_Ids {
 			return null;
 		}
 		$sid = self::post_formula( $post->ID, $post->post_type, $post->post_date );
-		add_post_meta( $post_id, WPSync_Config::META_KEY, $sid, true );
-		return get_post_meta( $post_id, WPSync_Config::META_KEY, true ) ?: $sid;
+		add_post_meta( $post_id, LivePull_Config::META_KEY, $sid, true );
+		return get_post_meta( $post_id, LivePull_Config::META_KEY, true ) ?: $sid;
 	}
 
 	public static function for_term( $term_id, $create = true ) {
@@ -49,7 +54,7 @@ final class WPSync_Ids {
 		if ( $term_id <= 0 ) {
 			return null;
 		}
-		$sid = get_term_meta( $term_id, WPSync_Config::META_KEY, true );
+		$sid = get_term_meta( $term_id, LivePull_Config::META_KEY, true );
 		if ( $sid ) {
 			return $sid;
 		}
@@ -61,8 +66,8 @@ final class WPSync_Ids {
 			return null;
 		}
 		$sid = self::term_formula( $term->term_id, $term->taxonomy, $term->slug );
-		add_term_meta( $term_id, WPSync_Config::META_KEY, $sid, true );
-		return get_term_meta( $term_id, WPSync_Config::META_KEY, true ) ?: $sid;
+		add_term_meta( $term_id, LivePull_Config::META_KEY, $sid, true );
+		return get_term_meta( $term_id, LivePull_Config::META_KEY, true ) ?: $sid;
 	}
 
 	/**
@@ -73,7 +78,7 @@ final class WPSync_Ids {
 	 */
 	public static function backfill() {
 		global $wpdb;
-		$key = WPSync_Config::META_KEY;
+		$key = LivePull_Config::META_KEY;
 
 		$posts = (int) $wpdb->query(
 			$wpdb->prepare(
@@ -119,9 +124,13 @@ final class WPSync_Ids {
 		$col   = 'post' === $kind ? 'post_id' : 'term_id';
 		$rows  = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT meta_value, GROUP_CONCAT(meta_id ORDER BY {$col} ASC) AS meta_ids, GROUP_CONCAT({$col} ORDER BY {$col} ASC) AS object_ids
-				 FROM {$table} WHERE meta_key = %s GROUP BY meta_value HAVING COUNT(*) > 1",
-				WPSync_Config::META_KEY
+				'SELECT meta_value, GROUP_CONCAT(meta_id ORDER BY %i ASC) AS meta_ids, GROUP_CONCAT(%i ORDER BY %i ASC) AS object_ids
+				 FROM %i WHERE meta_key = %s GROUP BY meta_value HAVING COUNT(*) > 1',
+				$col,
+				$col,
+				$col,
+				$table,
+				LivePull_Config::META_KEY
 			)
 		);
 		$fixed = 0;
@@ -130,7 +139,7 @@ final class WPSync_Ids {
 			$object_ids = array_map( 'intval', explode( ',', $row->object_ids ) );
 			// The oldest object keeps the ID; the copies get fresh ones.
 			for ( $i = 1, $n = count( $meta_ids ); $i < $n; $i++ ) {
-				$wpdb->update( $table, array( 'meta_value' => self::fresh_id( $kind, $object_ids[ $i ], $row->meta_value ) ), array( 'meta_id' => $meta_ids[ $i ] ) );
+				$wpdb->update( $table, array( 'meta_value' => self::fresh_id( $kind, $object_ids[ $i ], $row->meta_value ) ), array( 'meta_id' => $meta_ids[ $i ] ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 				$fixed++;
 			}
 		}
@@ -154,20 +163,20 @@ final class WPSync_Ids {
 
 	/** Backfill at most every 10 minutes (it scans every post and term). */
 	public static function maybe_backfill() {
-		if ( get_transient( 'wpsync_backfilled' ) ) {
+		if ( get_transient( 'livepull_backfilled' ) ) {
 			return;
 		}
 		self::backfill();
-		set_transient( 'wpsync_backfilled', 1, 10 * MINUTE_IN_SECONDS );
+		set_transient( 'livepull_backfilled', 1, 10 * MINUTE_IN_SECONDS );
 	}
 
 	/** @return array<string,int> sync ID => local object ID */
 	public static function map( $kind ) {
 		global $wpdb;
 		if ( 'post' === $kind ) {
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, post_id AS id FROM {$wpdb->postmeta} WHERE meta_key = %s", WPSync_Config::META_KEY ) );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, post_id AS id FROM {$wpdb->postmeta} WHERE meta_key = %s", LivePull_Config::META_KEY ) );
 		} else {
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, term_id AS id FROM {$wpdb->termmeta} WHERE meta_key = %s", WPSync_Config::META_KEY ) );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, term_id AS id FROM {$wpdb->termmeta} WHERE meta_key = %s", LivePull_Config::META_KEY ) );
 		}
 		$map = array();
 		foreach ( $rows as $r ) {

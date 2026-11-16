@@ -1,6 +1,6 @@
 <?php
 // WooCommerce: simple product (gallery, categories, upsell), variable product with a NEW global attribute, variations.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 if ( ! t_needs( 'woocommerce/woocommerce.php', 'WooCommerce' ) ) {
 	return;

@@ -1,6 +1,6 @@
 <?php
 // ACF fields (image, relationship, taxonomy, link) and Yoast SEO (titles, primary category, social image).
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 
 if ( 'create' === $phase ) {

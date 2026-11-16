@@ -1,10 +1,15 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
+// LivePull's job is moving content between databases, so it reads and writes tables directly
+// (always through $wpdb with prepared values). Results are never cached on purpose: each read
+// must see the database as it is right now.
+// phpcs:disable WordPress.DB.DirectDatabaseQuery
+
 /**
  * Builds the JSON payload describing one post or term's current state on this site.
  */
-final class WPSync_Exporter {
+final class LivePull_Exporter {
 
 	/** @var array{post:array<int,string>,term:array<int,string>} remote ID => sync ID */
 	private $idmap = array( 'post' => array(), 'term' => array() );
@@ -21,14 +26,14 @@ final class WPSync_Exporter {
 
 	/** A pulled setting. Name-based, so it needs no ID mapping of its own. */
 	public static function option( $name ) {
-		$spec = WPSync_Config::option_spec( $name );
+		$spec = LivePull_Config::option_spec( $name );
 		if ( null === $spec ) {
 			return null;
 		}
 		global $wpdb;
 		$exists = null !== $wpdb->get_var( $wpdb->prepare( "SELECT option_id FROM {$wpdb->options} WHERE option_name = %s", $name ) );
 		if ( ! $exists ) {
-			return true === $spec ? self::tombstone( 'option', WPSync_Config::option_sid( $name ) ) : null;
+			return true === $spec ? self::tombstone( 'option', LivePull_Config::option_sid( $name ) ) : null;
 		}
 		$value = get_option( $name );
 		if ( is_array( $spec ) ) {
@@ -41,25 +46,25 @@ final class WPSync_Exporter {
 			$value = $sub;
 		}
 		$e    = new self();
-		$refs = WPSync_Config::option_refs( $name );
+		$refs = LivePull_Config::option_refs( $name );
 		if ( $refs ) {
 			if ( is_array( $refs ) ) {
 				foreach ( $refs as $k => $kind ) {
 					if ( is_array( $value ) && isset( $value[ $k ] ) ) {
-						foreach ( WPSync_Refs::ids_in_value( $value[ $k ] ) as $id ) {
+						foreach ( LivePull_Refs::ids_in_value( $value[ $k ] ) as $id ) {
 							$e->remember_public( $kind, $id );
 						}
 					}
 				}
 			} else {
-				foreach ( WPSync_Refs::ids_in_value( $value ) as $id ) {
+				foreach ( LivePull_Refs::ids_in_value( $value ) as $id ) {
 					$e->remember_public( $refs, $id );
 				}
 			}
 		}
 		return array(
 			'type'    => 'option',
-			'sync_id' => WPSync_Config::option_sid( $name ),
+			'sync_id' => LivePull_Config::option_sid( $name ),
 			'option'  => array( 'name' => $name, 'mode' => true === $spec ? 'whole' : 'keys', 'value' => maybe_serialize( $value ) ),
 			'idmap'   => $e->idmap_public(),
 		);
@@ -79,7 +84,7 @@ final class WPSync_Exporter {
 		if ( $id <= 0 || isset( $this->idmap[ $kind ][ $id ] ) ) {
 			return $id;
 		}
-		$sid = 'post' === $kind ? WPSync_Ids::for_post( $id ) : WPSync_Ids::for_term( $id );
+		$sid = 'post' === $kind ? LivePull_Ids::for_post( $id ) : LivePull_Ids::for_term( $id );
 		if ( $sid ) {
 			$this->idmap[ $kind ][ $id ] = $sid;
 		}
@@ -88,7 +93,7 @@ final class WPSync_Exporter {
 
 	private function strip_meta( array $meta ) {
 		foreach ( array_keys( $meta ) as $k ) {
-			if ( WPSync_Config::is_ignored_meta( $k ) ) {
+			if ( LivePull_Config::is_ignored_meta( $k ) ) {
 				unset( $meta[ $k ] );
 			}
 		}
@@ -102,7 +107,7 @@ final class WPSync_Exporter {
 				continue;
 			}
 			foreach ( $meta[ $key ] as $raw ) {
-				foreach ( WPSync_Refs::ids_in_value( WPSync_Payload::unserialize( $raw ) ) as $id ) {
+				foreach ( LivePull_Refs::ids_in_value( LivePull_Payload::unserialize( $raw ) ) as $id ) {
 					$this->remember( $kind, $id );
 				}
 			}
@@ -111,7 +116,7 @@ final class WPSync_Exporter {
 
 	private function collect_content_refs( $content, $field ) {
 		$self = $this;
-		WPSync_Refs::walk_content(
+		LivePull_Refs::walk_content(
 			$content,
 			function ( $kind, $id ) use ( $self ) {
 				return $self->remember_public( $kind, $id );
@@ -127,21 +132,21 @@ final class WPSync_Exporter {
 
 	private function build_post( $post_id ) {
 		$post = get_post( $post_id );
-		if ( ! $post || 'auto-draft' === $post->post_status || ! WPSync_Config::post_type_ok( $post->post_type ) ) {
+		if ( ! $post || 'auto-draft' === $post->post_status || ! LivePull_Config::post_type_ok( $post->post_type ) ) {
 			return null;
 		}
-		$sid      = WPSync_Ids::for_post( $post->ID );
+		$sid      = LivePull_Ids::for_post( $post->ID );
 		$meta     = $this->strip_meta( (array) get_post_meta( $post->ID ) );
-		$ref_keys = WPSync_Refs::meta_ref_keys( $meta, 'post', $post->ID );
+		$ref_keys = LivePull_Refs::meta_ref_keys( $meta, 'post', $post->ID );
 
 		$this->collect_meta_refs( $meta, $ref_keys );
 		$this->collect_content_refs( $post->post_content, 'post_content' );
 		$this->collect_content_refs( $post->post_excerpt, 'post_excerpt' );
-		foreach ( WPSync_Refs::content_meta_keys() as $ck ) {
+		foreach ( LivePull_Refs::content_meta_keys() as $ck ) {
 			if ( isset( $meta[ $ck ] ) ) {
 				foreach ( (array) $meta[ $ck ] as $raw ) {
 					$self = $this;
-					WPSync_Refs::walk_value( WPSync_Payload::unserialize( $raw ), function ( $kind, $id ) use ( $self ) {
+					LivePull_Refs::walk_value( LivePull_Payload::unserialize( $raw ), function ( $kind, $id ) use ( $self ) {
 						return $self->remember_public( $kind, $id );
 					}, $ck );
 				}
@@ -154,7 +159,7 @@ final class WPSync_Exporter {
 		// Terms, by taxonomy, as sync IDs.
 		$terms = array();
 		foreach ( get_object_taxonomies( $post->post_type ) as $tax ) {
-			if ( ! WPSync_Config::taxonomy_ok( $tax ) ) {
+			if ( ! LivePull_Config::taxonomy_ok( $tax ) ) {
 				continue;
 			}
 			$ids = wp_get_object_terms( $post->ID, $tax, array( 'fields' => 'ids', 'orderby' => 'term_order' ) );
@@ -163,7 +168,7 @@ final class WPSync_Exporter {
 			}
 			$terms[ $tax ] = array();
 			foreach ( $ids as $tid ) {
-				$tsid = WPSync_Ids::for_term( $tid );
+				$tsid = LivePull_Ids::for_term( $tid );
 				if ( $tsid ) {
 					$terms[ $tax ][] = $tsid;
 				}
@@ -219,7 +224,7 @@ final class WPSync_Exporter {
 		$dir      = dirname( $file );
 		$dir      = ( '.' === $dir ) ? '' : $dir . '/';
 		$url_dir  = trailingslashit( dirname( $url ) );
-		$metadata = isset( $meta['_wp_attachment_metadata'][0] ) ? WPSync_Payload::unserialize( $meta['_wp_attachment_metadata'][0] ) : array();
+		$metadata = isset( $meta['_wp_attachment_metadata'][0] ) ? LivePull_Payload::unserialize( $meta['_wp_attachment_metadata'][0] ) : array();
 		$extra    = array();
 		if ( is_array( $metadata ) ) {
 			if ( ! empty( $metadata['sizes'] ) && is_array( $metadata['sizes'] ) ) {
@@ -241,16 +246,16 @@ final class WPSync_Exporter {
 
 	private function build_term( $term_id ) {
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! WPSync_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
 			return null;
 		}
-		$sid      = WPSync_Ids::for_term( $term->term_id );
+		$sid      = LivePull_Ids::for_term( $term->term_id );
 		$meta     = $this->strip_meta( (array) get_term_meta( $term->term_id ) );
-		$ref_keys = WPSync_Refs::meta_ref_keys( $meta, 'term', $term->term_id );
+		$ref_keys = LivePull_Refs::meta_ref_keys( $meta, 'term', $term->term_id );
 		$this->collect_meta_refs( $meta, $ref_keys );
-		$desc_kind = WPSync_Refs::description_kind( $term->taxonomy );
+		$desc_kind = LivePull_Refs::description_kind( $term->taxonomy );
 		if ( $desc_kind ) {
-			foreach ( WPSync_Refs::ids_in_value( WPSync_Payload::unserialize( $term->description ) ) as $rid ) {
+			foreach ( LivePull_Refs::ids_in_value( LivePull_Payload::unserialize( $term->description ) ) as $rid ) {
 				$this->remember( $desc_kind, $rid );
 			}
 		} else {
@@ -288,7 +293,7 @@ final class WPSync_Exporter {
 /**
  * Helpers shared by exporter and importer.
  */
-final class WPSync_Payload {
+final class LivePull_Payload {
 
 	/**
 	 * Unserialize without ever instantiating classes from remote data (object injection safe).

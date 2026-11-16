@@ -2,7 +2,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /** Talks to the live site's endpoints. */
-final class WPSync_Client {
+final class LivePull_Client {
 
 	private $base;
 	private $secret;
@@ -14,13 +14,13 @@ final class WPSync_Client {
 
 	private function headers() {
 		$h = array(
-			'X-WPSync-Key'  => $this->secret,
+			'X-LivePull-Key'  => $this->secret,
 			'Accept'        => 'application/json',
 			'Cache-Control' => 'no-cache, no-store',
 			'Pragma'        => 'no-cache',
 		);
-		if ( defined( 'WPSYNC_REMOTE_BASIC_AUTH' ) && WPSYNC_REMOTE_BASIC_AUTH ) {
-			$h['Authorization'] = 'Basic ' . base64_encode( WPSYNC_REMOTE_BASIC_AUTH ); // phpcs:ignore
+		if ( defined( 'LIVEPULL_REMOTE_BASIC_AUTH' ) && LIVEPULL_REMOTE_BASIC_AUTH ) {
+			$h['Authorization'] = 'Basic ' . base64_encode( LIVEPULL_REMOTE_BASIC_AUTH ); // phpcs:ignore
 		}
 		return $h;
 	}
@@ -30,10 +30,10 @@ final class WPSync_Client {
 	 * almost always skip it; ?rest_route= works even without pretty permalinks.
 	 */
 	private function urls( $route, array $params ) {
-		$params['_wpsync'] = (string) microtime( true ); // Defeat caches that ignore headers.
-		$pretty = add_query_arg( $params, $this->base . '/wp-json/wpsync/v1/' . ltrim( $route, '/' ) );
-		$plain  = add_query_arg( array_merge( array( 'rest_route' => '/wpsync/v1/' . ltrim( $route, '/' ) ), $params ), $this->base . '/' );
-		$order  = get_option( 'wpsync_remote_url_style' ) === 'plain' ? array( 'plain' => $plain, 'pretty' => $pretty ) : array( 'pretty' => $pretty, 'plain' => $plain );
+		$params['_livepull'] = (string) microtime( true ); // Defeat caches that ignore headers.
+		$pretty = add_query_arg( $params, $this->base . '/wp-json/livepull/v1/' . ltrim( $route, '/' ) );
+		$plain  = add_query_arg( array_merge( array( 'rest_route' => '/livepull/v1/' . ltrim( $route, '/' ) ), $params ), $this->base . '/' );
+		$order  = get_option( 'livepull_remote_url_style' ) === 'plain' ? array( 'plain' => $plain, 'pretty' => $pretty ) : array( 'pretty' => $pretty, 'plain' => $plain );
 		return $order;
 	}
 
@@ -54,7 +54,7 @@ final class WPSync_Client {
 				// HTML or empty: a cache, firewall or theme answered instead of WordPress's API.
 				$snippet    = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( substr( $raw, 0, 3000 ) ) ) );
 				$last_error = new WP_Error(
-					'wpsync_not_json',
+					'livepull_not_json',
 					sprintf(
 						'The live site returned a web page instead of data (HTTP %d%s). This is usually a page cache or firewall answering instead of WordPress. Exclude /wp-json/ and URLs containing rest_route= from caching on live (host cache, cache plugin, Cloudflare "Cache Everything" rules).',
 						$code,
@@ -65,14 +65,14 @@ final class WPSync_Client {
 				continue;
 			}
 			if ( 404 === $code && isset( $body['code'] ) && 'rest_no_route' === $body['code'] ) {
-				$last_error = new WP_Error( 'wpsync_http_404', 'WordPress on live answered, but WP Sync isn\'t running there. Check wp-sync.php and the wp-sync/ folder are both in wp-content/mu-plugins/ on live.', array( 'status' => 404 ) );
+				$last_error = new WP_Error( 'livepull_http_404', 'WordPress on live answered, but LivePull isn\'t running there. Install and activate LivePull on the live site too (if live still has the older "WP Sync" plugin, replace it with LivePull).', array( 'status' => 404 ) );
 				continue;
 			}
 			if ( 200 !== $code ) {
 				$msg = isset( $body['message'] ) ? $body['message'] : 'HTTP ' . $code;
-				return new WP_Error( 'wpsync_http_' . $code, $msg, array( 'status' => $code, 'url' => $url ) );
+				return new WP_Error( 'livepull_http_' . $code, $msg, array( 'status' => $code, 'url' => $url ) );
 			}
-			update_option( 'wpsync_remote_url_style', $style, false );
+			update_option( 'livepull_remote_url_style', $style, false );
 			return $body;
 		}
 		return $last_error;
@@ -107,10 +107,10 @@ final class WPSync_Client {
 	/** @return true|WP_Error */
 	public function download( $url, $dest ) {
 		if ( ! $this->url_allowed( $url ) ) {
-			return new WP_Error( 'wpsync_url', 'Refused to download from ' . wp_parse_url( $url, PHP_URL_HOST ) . ' (not the live site or a public address).' );
+			return new WP_Error( 'livepull_url', 'Refused to download from ' . wp_parse_url( $url, PHP_URL_HOST ) . ' (not the live site or a public address).' );
 		}
 		wp_mkdir_p( dirname( $dest ) );
-		$tmp = $dest . '.wpsync-part';
+		$tmp = $dest . '.livepull-part';
 		$res = wp_remote_get( $url, array( 'timeout' => 60, 'redirection' => 3, 'stream' => true, 'filename' => $tmp, 'headers' => $this->download_headers( $url ), 'sslverify' => self::sslverify() ) );
 		if ( is_wp_error( $res ) ) {
 			@unlink( $tmp ); // phpcs:ignore
@@ -119,20 +119,20 @@ final class WPSync_Client {
 		$code = wp_remote_retrieve_response_code( $res );
 		if ( 200 !== $code ) {
 			@unlink( $tmp ); // phpcs:ignore
-			return new WP_Error( 'wpsync_download', 'HTTP ' . $code . ' for ' . $url );
+			return new WP_Error( 'livepull_download', 'HTTP ' . $code . ' for ' . $url );
 		}
-		return rename( $tmp, $dest ) ? true : new WP_Error( 'wpsync_download', 'Could not write ' . $dest );
+		return LivePull_Config::fs()->move( $tmp, $dest, true ) ? true : new WP_Error( 'livepull_download', 'Could not write ' . $dest );
 	}
 
 	private static function sslverify() {
-		return defined( 'WPSYNC_SSL_VERIFY' ) ? (bool) WPSYNC_SSL_VERIFY : true;
+		return defined( 'LIVEPULL_SSL_VERIFY' ) ? (bool) LIVEPULL_SSL_VERIFY : true;
 	}
 
 	private function download_headers( $url ) {
 		// Only send basic auth to the live host itself, never to a CDN.
-		if ( defined( 'WPSYNC_REMOTE_BASIC_AUTH' ) && WPSYNC_REMOTE_BASIC_AUTH
+		if ( defined( 'LIVEPULL_REMOTE_BASIC_AUTH' ) && LIVEPULL_REMOTE_BASIC_AUTH
 			&& wp_parse_url( $url, PHP_URL_HOST ) === wp_parse_url( $this->base, PHP_URL_HOST ) ) {
-			return array( 'Authorization' => 'Basic ' . base64_encode( WPSYNC_REMOTE_BASIC_AUTH ) ); // phpcs:ignore
+			return array( 'Authorization' => 'Basic ' . base64_encode( LIVEPULL_REMOTE_BASIC_AUTH ) ); // phpcs:ignore
 		}
 		return array();
 	}

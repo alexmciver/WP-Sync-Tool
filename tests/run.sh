@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
-# WP Sync end-to-end test suite.
+# LivePull end-to-end test suite.
 #
 # Builds two real WordPress sites ("live" and "local", with different table prefixes and
-# different IDs), installs WP Sync and popular plugins/page builders on both, then for each
+# different IDs), installs LivePull and popular plugins/page builders on both, then for each
 # scenario in tests/scenarios: creates content on live → pulls → checks it on local
 # → changes it on live → pulls → checks again. Finally runs "Copy everything" and checks
 # the copied site renders.
 #
 # Requirements: PHP 7.4+, MySQL/MariaDB, WP-CLI (`wp`), zip/unzip.
 # Env:
-#   WPSYNC_TEST_DIR      work dir (default /tmp/wpsync-test)
-#   WPSYNC_TEST_PLUGINS  folder of plugin zips to install (default /tmp/plugins)
-#   WPSYNC_TEST_CORE     an unpacked WordPress core to copy (default: wp core download)
-#   WPSYNC_TEST_THEME    a theme zip to install and activate on both sites (e.g. Divi.zip)
+#   LIVEPULL_TEST_DIR      work dir (default /tmp/livepull-test)
+#   LIVEPULL_TEST_PLUGINS  folder of plugin zips to install (default /tmp/plugins)
+#   LIVEPULL_TEST_CORE     an unpacked WordPress core to copy (default: wp core download)
+#   LIVEPULL_TEST_THEME    a theme zip to install and activate on both sites (e.g. Divi.zip)
 #   DB_USER / DB_PASS / DB_HOST  (default root / "" / 127.0.0.1)
 # Usage: tests/run.sh [scenario-name ...]     e.g. tests/run.sh elementor divi
 set -uo pipefail
 export WP_CLI_ALLOW_ROOT=1
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${WPSYNC_TEST_DIR:-/tmp/wpsync-test}"
-PLUGINS="${WPSYNC_TEST_PLUGINS:-/tmp/plugins}"
+WORK="${LIVEPULL_TEST_DIR:-/tmp/livepull-test}"
+PLUGINS="${LIVEPULL_TEST_PLUGINS:-/tmp/plugins}"
 DB_USER="${DB_USER:-root}"; DB_PASS="${DB_PASS:-}"; DB_HOST="${DB_HOST:-127.0.0.1}"
 LIVE_PORT=8101; LOCAL_PORT=8102
 LIVE="$WORK/live"; LOCAL="$WORK/local"; STATE="$WORK/state"
 W_LIVE="wp --path=$LIVE --quiet"; W_LOCAL="wp --path=$LOCAL --quiet"
-export WPSYNC_TEST_STATE="$STATE" WPSYNC_TEST_LIB="$ROOT/tests/lib.php"
+export LIVEPULL_TEST_STATE="$STATE" LIVEPULL_TEST_LIB="$ROOT/tests/lib.php"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 mysql_q() { mysql -u"$DB_USER" ${DB_PASS:+-p"$DB_PASS"} -h"$DB_HOST" -e "$1"; }
@@ -34,13 +34,13 @@ setup_site() { # dir db prefix port title
 	local dir=$1 db=$2 prefix=$3 port=$4 title=$5
 	mysql_q "DROP DATABASE IF EXISTS $db; CREATE DATABASE $db;"
 	rm -rf "$dir"
-	if [ -n "${WPSYNC_TEST_CORE:-}" ]; then cp -r "$WPSYNC_TEST_CORE" "$dir"; else wp core download --path="$dir" --quiet; fi
+	if [ -n "${LIVEPULL_TEST_CORE:-}" ]; then cp -r "$LIVEPULL_TEST_CORE" "$dir"; else wp core download --path="$dir" --quiet; fi
 	wp config create --path="$dir" --dbname="$db" --dbuser="$DB_USER" --dbpass="$DB_PASS" --dbhost="$DB_HOST" --dbprefix="$prefix" --quiet --skip-check
 	wp core install --path="$dir" --url="http://localhost:$port" --title="$title" --admin_user=admin --admin_password=admin --admin_email=admin@example.com --skip-email --quiet
 	wp rewrite structure '/%postname%/' --path="$dir" --quiet
 	for z in "$PLUGINS"/*.zip; do [ -e "$z" ] && unzip -qo "$z" -d "$dir/wp-content/plugins/"; done
-	mkdir -p "$dir/wp-content/plugins/wp-sync"
-	cp -r "$ROOT/wp-sync.php" "$ROOT/wp-sync" "$ROOT/uninstall.php" "$dir/wp-content/plugins/wp-sync/"
+	mkdir -p "$dir/wp-content/plugins/livepull"
+	cp -r "$ROOT/livepull.php" "$ROOT/includes" "$ROOT/assets" "$ROOT/uninstall.php" "$dir/wp-content/plugins/livepull/"
 	# Classic menu locations for the menu scenario.
 	mkdir -p "$dir/wp-content/mu-plugins"
 	echo "<?php add_action( 'after_setup_theme', function () { register_nav_menus( array( 'primary' => 'Primary' ) ); } );" > "$dir/wp-content/mu-plugins/test-menus.php"
@@ -57,12 +57,12 @@ PHP
 		[ "$pl" = "hello" ] || [ "$pl" = "akismet" ] && continue
 		wp plugin activate "$pl" --path="$dir" --quiet 2>&1 | sed "s#^#  [setup $title] #" || true
 	done
-	if [ -n "${WPSYNC_TEST_THEME:-}" ]; then
-		unzip -qo "$WPSYNC_TEST_THEME" -d "$dir/wp-content/themes/"
-		local th; th=$(unzip -Z1 "$WPSYNC_TEST_THEME" | head -1 | cut -d/ -f1)
+	if [ -n "${LIVEPULL_TEST_THEME:-}" ]; then
+		unzip -qo "$LIVEPULL_TEST_THEME" -d "$dir/wp-content/themes/"
+		local th; th=$(unzip -Z1 "$LIVEPULL_TEST_THEME" | head -1 | cut -d/ -f1)
 		wp theme activate "$th" --path="$dir" --quiet 2>&1 | sed "s#^#  [setup $title] #" || true
 	fi
-	wp plugin is-active wp-sync --path="$dir" || { echo "WP Sync failed to activate on $title"; exit 1; }
+	wp plugin is-active livepull --path="$dir" || { echo "LivePull failed to activate on $title"; exit 1; }
 	# Builders that ship their own "getting started" redirects/notices: keep them quiet.
 	wp option update elementor_onboarded 1 --path="$dir" --quiet 2>/dev/null || true
 	(cd "$dir" && nohup php -S "localhost:$port" > "$WORK/$port.log" 2>&1 &)
@@ -78,15 +78,15 @@ mkdir -p "$WORK"; rm -rf "$STATE"; mkdir -p "$STATE"
 stop_servers
 say "Setting up live (wp_) and local (loc_) sites"
 mysql_q "SELECT 1" >/dev/null || { echo "Can't connect to MySQL as $DB_USER@$DB_HOST (set DB_USER / DB_PASS / DB_HOST)."; exit 1; }
-setup_site "$LIVE" wpsync_live wp_ $LIVE_PORT "Live site"
-setup_site "$LOCAL" wpsync_local loc_ $LOCAL_PORT "Local site"
+setup_site "$LIVE" livepull_live wp_ $LIVE_PORT "Live site"
+setup_site "$LOCAL" livepull_local loc_ $LOCAL_PORT "Local site"
 sleep 1
 
 say "Connecting local to live, then making local a full copy"
-CODE=$(wp --path="$LIVE" sync key | grep -o 'wpsync1:[A-Za-z0-9+/=]*')
-$W_LIVE option update wpsync_allow_full_copy always
-$W_LOCAL sync connect "$CODE" >/dev/null
-wp --path="$LOCAL" sync clone --yes --skip-files | tail -1
+CODE=$(wp --path="$LIVE" livepull key | grep -o 'livepull1:[A-Za-z0-9+/=]*')
+$W_LIVE option update livepull_allow_full_copy always
+$W_LOCAL livepull connect "$CODE" >/dev/null
+wp --path="$LOCAL" livepull clone --yes --skip-files | tail -1
 # After a copy, local's users are live's: same login (admin/admin).
 # Local-only content so new live items get DIFFERENT IDs here.
 for i in $(seq 1 25); do $W_LOCAL post create --post_title="Local only $i" --post_status=draft; done
@@ -110,21 +110,21 @@ count() {
 say "1. Creating content on live"
 run_phase "$LIVE" create | tee "$WORK/out-create.txt" | grep -v PASS || true
 say "   Pulling"
-wp --path="$LOCAL" sync pull --skip-backup 2>&1 | tail -3
+wp --path="$LOCAL" livepull pull --skip-backup 2>&1 | tail -3
 say "   Checking on local"
 run_phase "$LOCAL" verify | tee "$WORK/out-verify.txt"; count "$WORK/out-verify.txt"
 
 say "2. Changing content on live (edits, deletions, conflicts)"
 run_phase "$LOCAL" local_change > /dev/null
 run_phase "$LIVE" change | grep -v PASS || true
-wp --path="$LOCAL" sync pull --skip-backup 2>&1 | tail -3
+wp --path="$LOCAL" livepull pull --skip-backup 2>&1 | tail -3
 say "   Checking on local"
 run_phase "$LOCAL" verify_change | tee "$WORK/out-change.txt"; count "$WORK/out-change.txt"
 
 say "3. Copy everything from live (full copy) and render check"
-wp --path="$LOCAL" sync clone --yes 2>&1 | tail -1
+wp --path="$LOCAL" livepull clone --yes 2>&1 | tail -1
 run_phase "$LOCAL" verify_full | tee "$WORK/out-full.txt"; count "$WORK/out-full.txt"
 
 say "Result: $pass passed, $fail failed"
-[ "${WPSYNC_TEST_KEEP:-}" = "1" ] || stop_servers
+[ "${LIVEPULL_TEST_KEEP:-}" = "1" ] || stop_servers
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]

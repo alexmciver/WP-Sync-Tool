@@ -1,6 +1,6 @@
 <?php
 // SiteOrigin Page Builder: panels_data with SiteOrigin image widget + WordPress media image widget.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 if ( ! t_needs( 'siteorigin-panels/siteorigin-panels.php', 'SiteOrigin Page Builder' ) ) {
 	return;

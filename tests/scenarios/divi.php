@@ -1,11 +1,11 @@
 <?php
 // Divi 4 (shortcodes) and Divi 5 (blocks) content, Divi page settings, Theme Builder and
 // Theme Options. Without Divi installed this checks the stored data arrives intact and
-// re-pointed. With Divi active (WPSYNC_TEST_THEME=Divi.zip) it also checks the pages
+// re-pointed. With Divi active (LIVEPULL_TEST_THEME=Divi.zip) it also checks the pages
 // actually render on local, that live edits come through after local pages have been
 // viewed (Divi writes caches on view), and that the Theme Builder header shows after
 // Copy everything.
-require getenv( 'WPSYNC_TEST_LIB' );
+require getenv( 'LIVEPULL_TEST_LIB' );
 $phase = isset( $args[0] ) ? $args[0] : '';
 $divi  = 'Divi' === get_template() && function_exists( 'et_setup_theme' );
 
