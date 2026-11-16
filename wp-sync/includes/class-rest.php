@@ -111,6 +111,7 @@ final class WPSync_Rest {
 			'siteurl'        => site_url(),
 			'upload_baseurl' => $uploads['baseurl'],
 			'last_id'        => (int) $wpdb->get_var( 'SELECT MAX(id) FROM ' . WPSync_Config::table() ),
+			'recording_since' => (string) get_option( 'wpsync_installed', '' ),
 		);
 	}
 
@@ -182,8 +183,8 @@ final class WPSync_Rest {
 	 */
 	public static function scan( WP_REST_Request $r ) {
 		global $wpdb;
-		$since = strtotime( (string) $r['since'] . ' UTC' );
-		if ( ! $since ) {
+		$since = preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $r['since'] ) ? strtotime( (string) $r['since'] . ' 00:00:00 UTC' ) : false;
+		if ( false === $since ) {
 			return new WP_Error( 'wpsync_bad_date', 'Use YYYY-MM-DD for since.', array( 'status' => 400 ) );
 		}
 		$after = max( 0, (int) $r['after'] );
