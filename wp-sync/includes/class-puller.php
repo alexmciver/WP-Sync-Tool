@@ -341,7 +341,7 @@ final class WPSync_Puller {
 	/** Overwrite one local item with live's version. @return array|WP_Error report */
 	public static function take( $key ) {
 		list( $kind, $sid ) = array_pad( explode( ':', (string) $key, 2 ), 2, '' );
-		if ( ! in_array( $kind, array( 'post', 'term' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
+		if ( ! in_array( $kind, array( 'post', 'term', 'option' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
 			return new WP_Error( 'wpsync_bad_key', 'Unknown item.' );
 		}
 		$notices = array();
@@ -385,6 +385,11 @@ final class WPSync_Puller {
 		$rows = array();
 		foreach ( WPSync_Importer::locally_changed() as $key => $action ) {
 			list( $type, $sid ) = explode( ':', $key, 2 );
+			if ( 'option' === $type ) {
+				$n      = WPSync_Importer::option_name( $sid );
+				$rows[] = array( 'id' => 0, 'item' => 0 === strpos( $n, 'theme_mods_' ) ? 'setting "Menu locations / logo"' : 'setting "' . $n . '"', 'action' => 'edited', 'edit' => '' );
+				continue;
+			}
 			if ( 'post' === $type ) {
 				$id   = isset( $pm[ $sid ] ) ? $pm[ $sid ] : 0;
 				$post = $id ? get_post( $id ) : null;

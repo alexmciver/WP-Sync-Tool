@@ -89,7 +89,7 @@ final class WPSync_Rest {
 			'callback'            => array( __CLASS__, 'object' ),
 			'permission_callback' => $auth,
 			'args'                => array(
-				'type' => array( 'type' => 'string', 'enum' => array( 'post', 'term' ), 'required' => true ),
+				'type' => array( 'type' => 'string', 'enum' => array( 'post', 'term', 'option' ), 'required' => true ),
 				'id'   => array( 'type' => 'string', 'required' => true ),
 			),
 		) );
@@ -165,7 +165,23 @@ final class WPSync_Rest {
 		return array( 'items' => $items, 'last_id' => $last_id, 'has_more' => $has_more );
 	}
 
+	/** sync ID => option name, for every pulled option on this site. */
+	private static function option_map() {
+		$map = array();
+		foreach ( WPSync_Config::pulled_option_names() as $n ) {
+			$map[ WPSync_Config::option_sid( $n ) ] = $n;
+		}
+		return $map;
+	}
+
 	private static function payload_for_row( $row ) {
+		if ( 'option' === $row->object_type ) {
+			$map = self::option_map();
+			if ( isset( $map[ $row->sync_id ] ) ) {
+				return WPSync_Exporter::option( $map[ $row->sync_id ] );
+			}
+			return 'delete' === $row->action ? WPSync_Exporter::tombstone( 'option', $row->sync_id ) : null;
+		}
 		if ( 'delete' === $row->action ) {
 			// Only a tombstone if it really is gone (it may have been restored since).
 			$map = WPSync_Ids::map( $row->object_type );
@@ -176,20 +192,22 @@ final class WPSync_Rest {
 				return WPSync_Exporter::tombstone( $row->object_type, $row->sync_id );
 			}
 		}
-		// Look the object up by sync ID in case its row ID is stale.
+		// Look the object up by sync ID in case its row ID is stale. If it no longer exists,
+		// it was deleted (whatever the log says last), so send a deletion.
 		$id = (int) $row->object_id;
 		if ( 'post' === $row->object_type ) {
 			if ( WPSync_Ids::for_post( $id, false ) !== $row->sync_id ) {
 				$map = WPSync_Ids::map( 'post' );
 				$id  = isset( $map[ $row->sync_id ] ) ? $map[ $row->sync_id ] : 0;
 			}
-			return $id ? WPSync_Exporter::post( $id ) : null;
+			return ( $id && get_post( $id ) ) ? WPSync_Exporter::post( $id ) : WPSync_Exporter::tombstone( 'post', $row->sync_id );
 		}
 		if ( WPSync_Ids::for_term( $id, false ) !== $row->sync_id ) {
 			$map = WPSync_Ids::map( 'term' );
 			$id  = isset( $map[ $row->sync_id ] ) ? $map[ $row->sync_id ] : 0;
 		}
-		return $id ? WPSync_Exporter::term( $id ) : null;
+		$term = $id ? get_term( $id ) : null;
+		return ( $term && ! is_wp_error( $term ) ) ? WPSync_Exporter::term( $id ) : WPSync_Exporter::tombstone( 'term', $row->sync_id );
 	}
 
 	/**
@@ -221,6 +239,12 @@ final class WPSync_Rest {
 
 		$items = array();
 		if ( 0 === $after ) {
+			foreach ( WPSync_Config::pulled_option_names() as $n ) {
+				$item = WPSync_Exporter::option( $n );
+				if ( $item && empty( $item['deleted'] ) ) {
+					$items[] = $item;
+				}
+			}
 			$taxes = array_values( array_filter( get_taxonomies(), array( 'WPSync_Config', 'taxonomy_ok' ) ) );
 			$terms = get_terms( array( 'taxonomy' => $taxes, 'hide_empty' => false, 'fields' => 'ids' ) );
 			if ( ! is_wp_error( $terms ) ) {
@@ -247,6 +271,11 @@ final class WPSync_Rest {
 
 	public static function object( WP_REST_Request $r ) {
 		$type = $r['type'];
+		if ( 'option' === $type ) {
+			$map  = self::option_map();
+			$item = isset( $map[ (string) $r['id'] ] ) ? WPSync_Exporter::option( $map[ (string) $r['id'] ] ) : null;
+			return $item ? $item : new WP_Error( 'wpsync_not_found', 'Not found.', array( 'status' => 404 ) );
+		}
 		$map  = WPSync_Ids::map( $type );
 		$sid  = (string) $r['id'];
 		if ( ! isset( $map[ $sid ] ) ) {

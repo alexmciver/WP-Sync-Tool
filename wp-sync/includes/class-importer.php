@@ -189,10 +189,21 @@ final class WPSync_Importer {
 		if ( 'term' === $item['type'] ) {
 			return 0;
 		}
+		if ( 'option' === $item['type'] ) {
+			return 3; // Settings last: they point at pages/menus pulled in the same batch.
+		}
 		return ( isset( $item['post']['post_type'] ) && 'attachment' === $item['post']['post_type'] ) ? 1 : 2;
 	}
 
 	private function label( $item, $local_id = 0 ) {
+		if ( 'option' === $item['type'] ) {
+			$name = isset( $item['option']['name'] ) ? $item['option']['name'] : self::option_name( $item['sync_id'] );
+			$nice = array( 'blogname' => 'Site title', 'blogdescription' => 'Tagline', 'show_on_front' => 'Homepage displays', 'page_on_front' => 'Homepage', 'page_for_posts' => 'Posts page', 'sticky_posts' => 'Sticky posts', 'site_icon' => 'Site icon' );
+			if ( 0 === strpos( (string) $name, 'theme_mods_' ) ) {
+				return 'setting "Menu locations / logo"';
+			}
+			return 'setting "' . ( isset( $nice[ $name ] ) ? $nice[ $name ] : $name ) . '"';
+		}
 		if ( 'term' === $item['type'] ) {
 			$t = isset( $item['term'] ) ? $item['term'] : array();
 			return sprintf( '%s "%s"%s', isset( $t['taxonomy'] ) ? $t['taxonomy'] : 'term', isset( $t['name'] ) ? $t['name'] : $item['sync_id'], $local_id ? " (local #{$local_id})" : '' );
@@ -205,6 +216,84 @@ final class WPSync_Importer {
 		return sprintf( '%s "%s"%s', isset( $p['post_type'] ) ? $p['post_type'] : 'post', isset( $p['post_title'] ) && '' !== $p['post_title'] ? $p['post_title'] : '(no title)', $local_id ? " (local #{$local_id})" : '' );
 	}
 
+	public static function option_name( $sid ) {
+		foreach ( WPSync_Config::pulled_option_names() as $n ) {
+			if ( WPSync_Config::option_sid( $n ) === $sid ) {
+				return $n;
+			}
+		}
+		return '';
+	}
+
+	/** Settings: applied in the refs pass so page/menu IDs inside them are already local. */
+	private function handle_option( array $item, $key ) {
+		$forced   = $this->opts['theirs'] || in_array( $key, (array) $this->opts['force'], true );
+		$conflict = isset( $this->local_changed[ $key ] ) && ! $forced;
+		$this->handled[ $key ] = 0;
+		if ( $conflict ) {
+			$this->conflict( $key, $item, 0, ! empty( $item['deleted'] ) ? 'removed on live, but you changed it locally' : 'changed on live AND changed locally' );
+			return 0;
+		}
+		if ( ! empty( $item['deleted'] ) ) {
+			$name = self::option_name( $item['sync_id'] );
+			if ( $name && true === WPSync_Config::option_spec( $name ) && false !== get_option( $name, false ) ) {
+				if ( ! $this->opts['dry_run'] ) {
+					delete_option( $name );
+					$this->mark_synced( 'option', $item['sync_id'], 0 );
+				}
+				$this->report['deleted'][] = $this->label( $item );
+			}
+			return 0;
+		}
+		if ( ! $this->opts['dry_run'] && $this->option_differs( $item ) ) {
+			$this->ref_queue[] = array( $item, 0 );
+			$this->mark_synced( 'option', $item['sync_id'], 0 );
+			$this->report['updated'][] = $this->label( $item );
+		} elseif ( $this->opts['dry_run'] && $this->option_differs( $item ) ) {
+			$this->report['updated'][] = $this->label( $item );
+		}
+		return 0;
+	}
+
+	/** Skip settings that already match (ignoring ID differences, which are rewritten later). */
+	private function option_differs( array $item ) {
+		$o   = $item['option'];
+		$new = $this->urls( WPSync_Payload::unserialize( $o['value'] ) );
+		$cur = get_option( $o['name'], null );
+		if ( 'keys' === $o['mode'] ) {
+			$cur = is_array( $cur ) ? array_intersect_key( $cur, (array) $new ) : array();
+		}
+		return maybe_serialize( $cur ) !== maybe_serialize( $new ) || WPSync_Config::option_refs( $o['name'] );
+	}
+
+	private function apply_option( array $item, $cb ) {
+		$o     = $item['option'];
+		$value = $this->urls( WPSync_Payload::unserialize( $o['value'] ) );
+		$refs  = WPSync_Config::option_refs( $o['name'] );
+		if ( is_array( $refs ) && is_array( $value ) ) {
+			foreach ( $refs as $k => $kind ) {
+				if ( isset( $value[ $k ] ) ) {
+					$value[ $k ] = WPSync_Refs::map_value( $value[ $k ], function ( $id ) use ( $cb, $kind ) {
+						return $cb( $kind, $id );
+					} );
+				}
+			}
+		} elseif ( is_string( $refs ) ) {
+			$value = WPSync_Refs::map_value( $value, function ( $id ) use ( $cb, $refs ) {
+				return $cb( $refs, $id );
+			} );
+		}
+		if ( 'keys' === $o['mode'] ) {
+			$cur = get_option( $o['name'], array() );
+			$cur = is_array( $cur ) ? $cur : array();
+			foreach ( (array) $value as $k => $v ) {
+				$cur[ $k ] = $v;
+			}
+			$value = $cur;
+		}
+		update_option( $o['name'], $value );
+	}
+
 	/** @return int local ID (0 if not created) */
 	private function handle( array $item ) {
 		$type = $item['type'];
@@ -212,6 +301,9 @@ final class WPSync_Importer {
 		$key  = $type . ':' . $sid;
 		if ( isset( $this->handled[ $key ] ) ) {
 			return $this->handled[ $key ];
+		}
+		if ( 'option' === $type ) {
+			return $this->handle_option( $item, $key );
 		}
 		$local   = isset( $this->maps[ $type ][ $sid ] ) ? $this->maps[ $type ][ $sid ] : 0;
 		$matched = false;
@@ -309,6 +401,9 @@ final class WPSync_Importer {
 			}
 		} else {
 			$p = $item['post'];
+			if ( 'nav_menu_item' === $p['post_type'] ) {
+				return 0; // Menu item "slugs" are just numbers; matching them would be a guess.
+			}
 			if ( 'attachment' === $p['post_type'] && ! empty( $item['meta']['_wp_attached_file'][0] ) ) {
 				$cands = $wpdb->get_col( $wpdb->prepare(
 					"SELECT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_wp_attached_file'
@@ -431,6 +526,10 @@ final class WPSync_Importer {
 		$cb    = function ( $kind, $remote_id ) use ( $self, $idmap ) {
 			return $self->resolve_remote_id_public( $kind, $remote_id, $idmap );
 		};
+		if ( 'option' === $item['type'] ) {
+			$this->apply_option( $item, $cb );
+			return;
+		}
 		$meta     = isset( $item['meta'] ) && is_array( $item['meta'] ) ? $item['meta'] : array();
 		$ref_keys = isset( $item['ref_keys'] ) && is_array( $item['ref_keys'] ) ? $item['ref_keys'] : array();
 		$kind     = $item['type'];

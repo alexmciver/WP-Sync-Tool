@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.4.0';
+	const VERSION  = '0.4.1';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -73,7 +73,7 @@ final class WPSync_Config {
 	public static function excluded_post_types() {
 		$defaults = array(
 			// Core internals and structure.
-			'revision', 'nav_menu_item', 'customize_changeset', 'oembed_cache', 'user_request',
+			'revision', 'customize_changeset', 'oembed_cache', 'user_request',
 			'custom_css', 'wp_template', 'wp_template_part', 'wp_global_styles', 'wp_navigation',
 			'wp_font_family', 'wp_font_face',
 			// ACF definitions (keep these in acf-json + Git).
@@ -91,13 +91,16 @@ final class WPSync_Config {
 			// Background job queues.
 			'scheduled-action',
 		);
+		if ( ! self::pull_menus() ) {
+			$defaults[] = 'nav_menu_item';
+		}
 		$extra = defined( 'WPSYNC_EXCLUDE_POST_TYPES' ) ? array_map( 'trim', explode( ',', WPSYNC_EXCLUDE_POST_TYPES ) ) : array();
 		return array_values( array_unique( array_filter( apply_filters( 'wpsync_excluded_post_types', array_merge( $defaults, $extra ) ) ) ) );
 	}
 
 	public static function excluded_taxonomies() {
 		$defaults = array(
-			'nav_menu', 'link_category', 'wp_theme', 'wp_template_part_area',
+			'link_category', 'wp_theme', 'wp_template_part_area',
 			// Divi library.
 			'layout_category', 'layout_type', 'scope', 'module_width', 'layout_pack', 'layout_tag',
 			// Elementor library.
@@ -105,6 +108,9 @@ final class WPSync_Config {
 			// Action Scheduler.
 			'action-group',
 		);
+		if ( ! self::pull_menus() ) {
+			$defaults[] = 'nav_menu';
+		}
 		$extra = defined( 'WPSYNC_EXCLUDE_TAXONOMIES' ) ? array_map( 'trim', explode( ',', WPSYNC_EXCLUDE_TAXONOMIES ) ) : array();
 		return array_values( array_unique( array_filter( apply_filters( 'wpsync_excluded_taxonomies', array_merge( $defaults, $extra ) ) ) ) );
 	}
@@ -115,6 +121,82 @@ final class WPSync_Config {
 			'wpsync_ignored_meta_keys',
 			array( self::META_KEY, '_edit_lock', '_edit_last', '_encloseme', '_pingme' )
 		);
+	}
+
+	/** Menus are pulled unless WPSYNC_PULL_MENUS is false. */
+	public static function pull_menus() {
+		return ! defined( 'WPSYNC_PULL_MENUS' ) || WPSYNC_PULL_MENUS;
+	}
+
+	/**
+	 * Settings pulled from live: [ option name or pattern => true (whole value) | [ sub-keys ] ].
+	 * Only things clients typically change themselves; theme/plugin settings stay yours.
+	 * Extra options: define( 'WPSYNC_PULL_OPTIONS', 'option_a,option_b' ) or the wpsync_pulled_options filter.
+	 */
+	public static function pulled_options() {
+		$o = array(
+			'blogname'        => true,
+			'blogdescription' => true,
+			'show_on_front'   => true,
+			'page_on_front'   => true,
+			'page_for_posts'  => true,
+			'sticky_posts'    => true,
+			'site_icon'       => true,
+			'theme_mods_*'    => array( 'nav_menu_locations', 'custom_logo' ), // Menu locations + logo only.
+		);
+		if ( ! self::pull_menus() ) {
+			$o['theme_mods_*'] = array( 'custom_logo' );
+		}
+		if ( defined( 'WPSYNC_PULL_OPTIONS' ) ) {
+			foreach ( array_filter( array_map( 'trim', explode( ',', (string) WPSYNC_PULL_OPTIONS ) ) ) as $n ) {
+				$o[ $n ] = true;
+			}
+		}
+		return apply_filters( 'wpsync_pulled_options', $o );
+	}
+
+	/** @return true|array|null how an option is pulled (whole / sub-keys), or null if it isn't. */
+	public static function option_spec( $name ) {
+		foreach ( self::pulled_options() as $pattern => $spec ) {
+			if ( $pattern === $name || ( false !== strpos( $pattern, '*' ) && fnmatch( $pattern, $name ) ) ) {
+				return $spec;
+			}
+		}
+		return null;
+	}
+
+	/** Which options (or their sub-keys) hold post/term IDs. */
+	public static function option_refs( $name ) {
+		$refs = array(
+			'page_on_front'  => 'post',
+			'page_for_posts' => 'post',
+			'sticky_posts'   => 'post',
+			'site_icon'      => 'post',
+		);
+		if ( 0 === strpos( $name, 'theme_mods_' ) ) {
+			return array( 'nav_menu_locations' => 'term', 'custom_logo' => 'post' );
+		}
+		$r = isset( $refs[ $name ] ) ? $refs[ $name ] : null;
+		return apply_filters( 'wpsync_option_refs', $r, $name );
+	}
+
+	public static function option_sid( $name ) {
+		return md5( 'option|' . $name );
+	}
+
+	/** Every pulled option name that exists on this site. */
+	public static function pulled_option_names() {
+		global $wpdb;
+		$names = array();
+		foreach ( self::pulled_options() as $pattern => $spec ) {
+			if ( false === strpos( $pattern, '*' ) ) {
+				$names[] = $pattern;
+				continue;
+			}
+			$like  = implode( '%', array_map( array( $wpdb, 'esc_like' ), explode( '*', $pattern ) ) );
+			$names = array_merge( $names, (array) $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like ) ) );
+		}
+		return array_values( array_unique( $names ) );
 	}
 
 	public static function post_type_ok( $type ) {
