@@ -36,6 +36,7 @@ final class WPSync_Importer {
 		'skipped'   => array(),
 		'errors'    => array(),
 		'files'     => 0,
+		'downloads' => array(), // Queued media files when 'defer_files' is on.
 	);
 
 	/**
@@ -44,7 +45,7 @@ final class WPSync_Importer {
 	 */
 	public function __construct( WPSync_Client $client, array $remote, array $opts ) {
 		$this->client = $client;
-		$this->opts   = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'redownload' => false, 'url_replace' => true, 'force' => array() ) );
+		$this->opts   = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'redownload' => false, 'url_replace' => true, 'force' => array(), 'defer_files' => false ) );
 
 		if ( $this->opts['url_replace'] ) {
 			$this->build_url_map( $remote );
@@ -133,9 +134,7 @@ final class WPSync_Importer {
 
 	public function run( array $items ) {
 		// Terms first, then media, then everything else; deletions last.
-		usort( $items, function ( $a, $b ) {
-			return self::rank( $a ) - self::rank( $b );
-		} );
+		$items = self::sort_items( $items );
 
 		WPSync_Logger::suspend();
 		kses_remove_filters();
@@ -164,6 +163,23 @@ final class WPSync_Importer {
 			WPSync_Logger::resume();
 		}
 		return $this->report;
+	}
+
+	/** Terms first, then media, then everything else; deletions last. */
+	public static function sort_items( array $items ) {
+		$i = 0;
+		foreach ( $items as &$item ) {
+			$item['__order'] = $i++;
+		}
+		unset( $item );
+		usort( $items, function ( $a, $b ) {
+			$r = self::rank( $a ) - self::rank( $b );
+			return $r ? $r : $a['__order'] - $b['__order'];
+		} );
+		foreach ( $items as &$item ) {
+			unset( $item['__order'] );
+		}
+		return $items;
 	}
 
 	private static function rank( $item ) {
@@ -511,22 +527,36 @@ final class WPSync_Importer {
 		}
 	}
 
-	private function download_files( array $files ) {
+	/**
+	 * Local destination for a media file, or null if the path is unsafe (never write
+	 * outside the uploads folder).
+	 */
+	public static function safe_dest( $path ) {
+		$path = wp_normalize_path( (string) $path );
+		if ( '' === $path || false !== strpos( $path, '..' ) || '/' === $path[0] || preg_match( '#^[a-z]:#i', $path ) || false !== strpos( $path, "\0" ) ) {
+			return null;
+		}
 		$uploads = wp_get_upload_dir();
-		$base    = wp_normalize_path( $uploads['basedir'] );
+		return wp_normalize_path( $uploads['basedir'] ) . '/' . $path;
+	}
+
+	private function download_files( array $files ) {
 		foreach ( $files as $f ) {
-			$path = isset( $f['path'] ) ? wp_normalize_path( (string) $f['path'] ) : '';
+			$path = isset( $f['path'] ) ? (string) $f['path'] : '';
 			$url  = isset( $f['url'] ) ? (string) $f['url'] : '';
-			// Never write outside the uploads folder.
-			if ( '' === $path || '' === $url || false !== strpos( $path, '..' ) || '/' === $path[0] || preg_match( '#^[a-z]:#i', $path ) || false !== strpos( $path, "\0" ) ) {
+			$dest = self::safe_dest( $path );
+			if ( ! $dest || '' === $url ) {
 				$this->report['skipped'][] = 'Unsafe file path skipped: ' . $path;
 				continue;
 			}
 			if ( ! preg_match( '#^https?://#i', $url ) ) {
 				continue;
 			}
-			$dest = $base . '/' . $path;
 			if ( file_exists( $dest ) && ! $this->opts['redownload'] ) {
+				continue;
+			}
+			if ( $this->opts['defer_files'] ) {
+				$this->report['downloads'][] = array( 'url' => $url, 'path' => $path );
 				continue;
 			}
 			$res = $this->client->download( $url, $dest );

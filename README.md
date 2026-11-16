@@ -8,7 +8,11 @@ Nothing is ever written to the live site. Live only answers read-only, key-prote
 
 ## Install (both sites)
 
-Upload `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/` on **live** and **local** (create the `mu-plugins` folder if it doesn't exist). Must-use plugins are always on; there's nothing to activate.
+**As a normal plugin (easiest):** on **live** and **local**, go to **Plugins → Add New → Upload Plugin**, upload `wp-sync.zip`, and click **Activate**. To update later, upload the new zip and choose **Replace current with uploaded**.
+
+**Or as a must-use plugin** (can't be deactivated by accident): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
+
+Keep it active on live at all times: changes made on live while it's deactivated aren't recorded (use catch-up mode to recover).
 
 ## Connect (in WordPress)
 
@@ -94,4 +98,7 @@ define( 'WPSYNC_DEFAULT_AUTHOR', 'alex' );                 // fallback author on
 - **"Invalid sync key"**: the key on local doesn't match live's. Copy it again from live's Tools → WP Sync.
 - **401/403, "did not return JSON"**: a security plugin or firewall (Wordfence, Cloudflare, "Disable REST API") is blocking `?rest_route=/wpsync/v1/…` on live. Allow that path.
 - **"Is WP Sync installed…on the live site?" (404)**: the files aren't in live's `wp-content/mu-plugins/`, or the `wp-sync/` folder is missing next to `wp-sync.php`.
-- **"Another pull is already running"**: wait, or it unlocks by itself after 15 minutes.
+- **"Another pull is already running"**: if nothing is running (e.g. the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks by itself after 15 minutes.
+- **"The live site returned a web page instead of data"**: a page cache or firewall on live is answering instead of WordPress. Exclude `/wp-json/` and URLs containing `rest_route=` from caching (host cache, cache plugin, Cloudflare rules).
+- **Quick check from a browser:** open `https://your-live-site/wp-json/wpsync/v1/status`. You should see `{"code":"wpsync_forbidden","message":"Invalid sync key." …}`, which is correct: it means WP Sync is running and protected. A web page means something is caching it; `rest_no_route` means the plugin isn't active.
+- **Pull seems slow**: the first pull downloads every image size for each new media item. The progress line shows what it's doing; you can Cancel at any time and press Pull again to carry on.

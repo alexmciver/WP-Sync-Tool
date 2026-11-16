@@ -13,40 +13,76 @@ final class WPSync_Client {
 	}
 
 	private function headers() {
-		$h = array( 'X-WPSync-Key' => $this->secret, 'Accept' => 'application/json' );
+		$h = array(
+			'X-WPSync-Key'  => $this->secret,
+			'Accept'        => 'application/json',
+			'Cache-Control' => 'no-cache, no-store',
+			'Pragma'        => 'no-cache',
+		);
 		if ( defined( 'WPSYNC_REMOTE_BASIC_AUTH' ) && WPSYNC_REMOTE_BASIC_AUTH ) {
 			$h['Authorization'] = 'Basic ' . base64_encode( WPSYNC_REMOTE_BASIC_AUTH ); // phpcs:ignore
 		}
 		return $h;
 	}
 
+	/**
+	 * The two ways to reach the REST API. /wp-json/ is tried first because page caches
+	 * almost always skip it; ?rest_route= works even without pretty permalinks.
+	 */
+	private function urls( $route, array $params ) {
+		$params['_wpsync'] = (string) microtime( true ); // Defeat caches that ignore headers.
+		$pretty = add_query_arg( $params, $this->base . '/wp-json/wpsync/v1/' . ltrim( $route, '/' ) );
+		$plain  = add_query_arg( array_merge( array( 'rest_route' => '/wpsync/v1/' . ltrim( $route, '/' ) ), $params ), $this->base . '/' );
+		$order  = get_option( 'wpsync_remote_url_style' ) === 'plain' ? array( 'plain' => $plain, 'pretty' => $pretty ) : array( 'pretty' => $pretty, 'plain' => $plain );
+		return $order;
+	}
+
 	/** @return array|WP_Error */
 	public function get( $route, array $params = array() ) {
-		$url = add_query_arg(
-			array_merge( array( 'rest_route' => '/wpsync/v1/' . ltrim( $route, '/' ) ), $params ),
-			$this->base . '/'
-		);
-		$res = wp_remote_get( $url, array( 'headers' => $this->headers(), 'timeout' => 120, 'sslverify' => self::sslverify() ) );
-		if ( is_wp_error( $res ) ) {
-			return $res;
+		$last_error = null;
+		foreach ( $this->urls( $route, $params ) as $style => $url ) {
+			$res = wp_remote_get( $url, array( 'headers' => $this->headers(), 'timeout' => 60, 'sslverify' => self::sslverify(), 'redirection' => 3 ) );
+			if ( is_wp_error( $res ) ) {
+				// Network-level failure: the other URL style won't help.
+				return new WP_Error( $res->get_error_code(), $res->get_error_message() . ' (' . $this->base . ')' );
+			}
+			$code = (int) wp_remote_retrieve_response_code( $res );
+			$raw  = wp_remote_retrieve_body( $res );
+			$body = json_decode( $raw, true );
+
+			if ( ! is_array( $body ) ) {
+				// HTML or empty: a cache, firewall or theme answered instead of WordPress's API.
+				$snippet    = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( substr( $raw, 0, 3000 ) ) ) );
+				$last_error = new WP_Error(
+					'wpsync_not_json',
+					sprintf(
+						'The live site returned a web page instead of data (HTTP %d%s). This is usually a page cache or firewall answering instead of WordPress. Exclude /wp-json/ and URLs containing rest_route= from caching on live (host cache, cache plugin, Cloudflare "Cache Everything" rules).',
+						$code,
+						$snippet ? ': "' . mb_substr( $snippet, 0, 80 ) . '…"' : ''
+					),
+					array( 'status' => $code, 'url' => $url )
+				);
+				continue;
+			}
+			if ( 404 === $code && isset( $body['code'] ) && 'rest_no_route' === $body['code'] ) {
+				$last_error = new WP_Error( 'wpsync_http_404', 'WordPress on live answered, but WP Sync isn\'t running there. Check wp-sync.php and the wp-sync/ folder are both in wp-content/mu-plugins/ on live.', array( 'status' => 404 ) );
+				continue;
+			}
+			if ( 200 !== $code ) {
+				$msg = isset( $body['message'] ) ? $body['message'] : 'HTTP ' . $code;
+				return new WP_Error( 'wpsync_http_' . $code, $msg, array( 'status' => $code, 'url' => $url ) );
+			}
+			update_option( 'wpsync_remote_url_style', $style, false );
+			return $body;
 		}
-		$code = wp_remote_retrieve_response_code( $res );
-		$body = json_decode( wp_remote_retrieve_body( $res ), true );
-		if ( 200 !== $code ) {
-			$msg = is_array( $body ) && isset( $body['message'] ) ? $body['message'] : 'HTTP ' . $code;
-			return new WP_Error( 'wpsync_http_' . $code, $msg, array( 'status' => $code, 'url' => $url ) );
-		}
-		if ( ! is_array( $body ) ) {
-			return new WP_Error( 'wpsync_bad_json', 'Live site did not return JSON. Is the plugin installed there, and is the REST API reachable?' );
-		}
-		return $body;
+		return $last_error;
 	}
 
 	/** @return true|WP_Error */
 	public function download( $url, $dest ) {
 		wp_mkdir_p( dirname( $dest ) );
 		$tmp = $dest . '.wpsync-part';
-		$res = wp_remote_get( $url, array( 'timeout' => 300, 'stream' => true, 'filename' => $tmp, 'headers' => $this->download_headers( $url ), 'sslverify' => self::sslverify() ) );
+		$res = wp_remote_get( $url, array( 'timeout' => 60, 'redirection' => 3, 'stream' => true, 'filename' => $tmp, 'headers' => $this->download_headers( $url ), 'sslverify' => self::sslverify() ) );
 		if ( is_wp_error( $res ) ) {
 			@unlink( $tmp ); // phpcs:ignore
 			return $res;

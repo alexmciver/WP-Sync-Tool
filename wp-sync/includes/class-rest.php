@@ -12,6 +12,34 @@ final class WPSync_Rest {
 
 	public static function init() {
 		add_action( 'rest_api_init', array( __CLASS__, 'routes' ) );
+		add_filter( 'rest_post_dispatch', array( __CLASS__, 'no_cache' ), 10, 3 );
+		// Security plugins that switch the REST API off for visitors: let our routes through
+		// when the request carries the right key (they are still checked again by authorise()).
+		add_filter( 'rest_authentication_errors', array( __CLASS__, 'allow_keyed' ), 999 );
+	}
+
+	private static function is_ours() {
+		$uri   = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '';
+		$route = isset( $_GET['rest_route'] ) ? (string) wp_unslash( $_GET['rest_route'] ) : ''; // phpcs:ignore
+		return false !== strpos( $uri, '/wpsync/v1/' ) || 0 === strpos( $route, '/wpsync/v1/' );
+	}
+
+	public static function allow_keyed( $result ) {
+		if ( ! is_wp_error( $result ) || ! self::is_ours() ) {
+			return $result;
+		}
+		$secret = WPSync_Config::secret();
+		$given  = isset( $_SERVER['HTTP_X_WPSYNC_KEY'] ) ? (string) wp_unslash( $_SERVER['HTTP_X_WPSYNC_KEY'] ) : '';
+		return ( strlen( $secret ) >= 32 && '' !== $given && hash_equals( $secret, $given ) ) ? true : $result;
+	}
+
+	public static function no_cache( $response, $server, $request ) {
+		if ( 0 === strpos( $request->get_route(), '/' . self::NS ) && $response instanceof WP_REST_Response ) {
+			$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, private' );
+			$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+			$response->header( 'CDN-Cache-Control', 'no-store' );
+		}
+		return $response;
 	}
 
 	public static function routes() {
