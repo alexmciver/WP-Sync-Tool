@@ -101,6 +101,10 @@ final class WPSync_Ids {
 			)
 		);
 
+		// Remove IDs left behind by deleted objects (older versions could leave these).
+		$wpdb->query( $wpdb->prepare( "DELETE m FROM {$wpdb->postmeta} m LEFT JOIN {$wpdb->posts} p ON p.ID = m.post_id WHERE m.meta_key = %s AND p.ID IS NULL", $key ) );
+		$wpdb->query( $wpdb->prepare( "DELETE m FROM {$wpdb->termmeta} m LEFT JOIN {$wpdb->terms} t ON t.term_id = m.term_id WHERE m.meta_key = %s AND t.term_id IS NULL", $key ) );
+
 		$dupes = self::fix_duplicates( 'post' ) + self::fix_duplicates( 'term' );
 
 		if ( $posts || $terms || $dupes ) {

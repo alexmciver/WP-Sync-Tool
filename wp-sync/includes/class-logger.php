@@ -14,6 +14,7 @@ final class WPSync_Logger {
 
 	private static $suspended = 0;
 	private static $seen      = array();
+	private static $deleting  = array(); // Objects being deleted: their meta clean-up isn't an "edit".
 
 	public static function init() {
 		// Make sure pre-existing content is stamped from its ORIGINAL data before an edit changes it.
@@ -36,6 +37,11 @@ final class WPSync_Logger {
 		foreach ( array( 'added_term_meta', 'updated_term_meta', 'deleted_term_meta' ) as $hook ) {
 			add_action( $hook, array( __CLASS__, 'term_meta_changed' ), 999, 3 );
 		}
+
+		// Pulled settings (site title, homepage, menu locations…).
+		add_action( 'added_option', array( __CLASS__, 'option_added' ), 999, 2 );
+		add_action( 'updated_option', array( __CLASS__, 'option_updated' ), 999, 3 );
+		add_action( 'deleted_option', array( __CLASS__, 'option_deleted' ), 999 );
 
 		// Duplicate Post / similar plugins copy all meta, including our ID. Give copies their own.
 		add_action( 'added_post_meta', array( __CLASS__, 'dedupe_post_id' ), 1, 4 );
@@ -69,7 +75,7 @@ final class WPSync_Logger {
 	}
 
 	public static function touch_post( $post_id ) {
-		if ( self::$suspended ) {
+		if ( self::$suspended || isset( self::$deleting[ 'post:' . (int) $post_id ] ) ) {
 			return;
 		}
 		$post = get_post( $post_id );
@@ -89,6 +95,7 @@ final class WPSync_Logger {
 			return;
 		}
 		$sid = WPSync_Ids::for_post( $post->ID, false ) ?: WPSync_Ids::post_formula( $post->ID, $post->post_type, $post->post_date );
+		self::$deleting[ 'post:' . (int) $post->ID ] = true;
 		self::write( 'post', $sid, $post->ID, 'delete' );
 	}
 
@@ -124,6 +131,45 @@ final class WPSync_Logger {
 		return $list;
 	}
 
+	/* -------------------------------------------------------------- Options */
+
+	public static function option_added( $name, $value ) {
+		if ( ! self::$suspended && null !== WPSync_Config::option_spec( $name ) ) {
+			self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'upsert' );
+		}
+	}
+
+	public static function option_updated( $name, $old, $new ) {
+		if ( self::$suspended ) {
+			return;
+		}
+		$spec = WPSync_Config::option_spec( $name );
+		if ( null === $spec ) {
+			return;
+		}
+		if ( is_array( $spec ) ) {
+			// Only log when one of the pulled sub-keys changed (e.g. menu locations, not every Customizer tweak).
+			$changed = false;
+			foreach ( $spec as $k ) {
+				$a = is_array( $old ) && isset( $old[ $k ] ) ? $old[ $k ] : null;
+				$b = is_array( $new ) && isset( $new[ $k ] ) ? $new[ $k ] : null;
+				if ( $a != $b ) { // phpcs:ignore -- loose on purpose ("5" vs 5).
+					$changed = true;
+				}
+			}
+			if ( ! $changed ) {
+				return;
+			}
+		}
+		self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'upsert' );
+	}
+
+	public static function option_deleted( $name ) {
+		if ( ! self::$suspended && true === WPSync_Config::option_spec( $name ) ) {
+			self::write( 'option', WPSync_Config::option_sid( $name ), 0, 'delete' );
+		}
+	}
+
 	/* ---------------------------------------------------------------- Terms */
 
 	public static function stamp_term( $term_id ) {
@@ -133,7 +179,7 @@ final class WPSync_Logger {
 	}
 
 	public static function touch_term( $term_id ) {
-		if ( self::$suspended ) {
+		if ( self::$suspended || isset( self::$deleting[ 'term:' . (int) $term_id ] ) ) {
 			return;
 		}
 		$term = get_term( $term_id );
@@ -152,6 +198,7 @@ final class WPSync_Logger {
 			return;
 		}
 		$sid = WPSync_Ids::for_term( $term->term_id, false ) ?: WPSync_Ids::term_formula( $term->term_id, $term->taxonomy, $term->slug );
+		self::$deleting[ 'term:' . (int) $term->term_id ] = true;
 		self::write( 'term', $sid, $term->term_id, 'delete' );
 	}
 

@@ -19,6 +19,57 @@ final class WPSync_Exporter {
 		return $e->build_term( (int) $term_id );
 	}
 
+	/** A pulled setting. Name-based, so it needs no ID mapping of its own. */
+	public static function option( $name ) {
+		$spec = WPSync_Config::option_spec( $name );
+		if ( null === $spec ) {
+			return null;
+		}
+		global $wpdb;
+		$exists = null !== $wpdb->get_var( $wpdb->prepare( "SELECT option_id FROM {$wpdb->options} WHERE option_name = %s", $name ) );
+		if ( ! $exists ) {
+			return true === $spec ? self::tombstone( 'option', WPSync_Config::option_sid( $name ) ) : null;
+		}
+		$value = get_option( $name );
+		if ( is_array( $spec ) ) {
+			$sub = array();
+			foreach ( $spec as $k ) {
+				if ( is_array( $value ) && array_key_exists( $k, $value ) ) {
+					$sub[ $k ] = $value[ $k ];
+				}
+			}
+			$value = $sub;
+		}
+		$e    = new self();
+		$refs = WPSync_Config::option_refs( $name );
+		if ( $refs ) {
+			if ( is_array( $refs ) ) {
+				foreach ( $refs as $k => $kind ) {
+					if ( is_array( $value ) && isset( $value[ $k ] ) ) {
+						foreach ( WPSync_Refs::ids_in_value( $value[ $k ] ) as $id ) {
+							$e->remember_public( $kind, $id );
+						}
+					}
+				}
+			} else {
+				foreach ( WPSync_Refs::ids_in_value( $value ) as $id ) {
+					$e->remember_public( $refs, $id );
+				}
+			}
+		}
+		return array(
+			'type'    => 'option',
+			'sync_id' => WPSync_Config::option_sid( $name ),
+			'option'  => array( 'name' => $name, 'mode' => true === $spec ? 'whole' : 'keys', 'value' => maybe_serialize( $value ) ),
+			'idmap'   => $e->idmap_public(),
+		);
+	}
+
+	/** @internal */
+	public function idmap_public() {
+		return $this->idmap;
+	}
+
 	public static function tombstone( $type, $sid ) {
 		return array( 'type' => $type, 'sync_id' => $sid, 'deleted' => true );
 	}

@@ -43,6 +43,16 @@ final class WPSync_Refs {
 			}
 		}
 
+		// Menu items: parent item, and the page/post/category they link to.
+		if ( 'post' === $object_type && isset( $meta['_menu_item_type'][0] ) ) {
+			$keys['_menu_item_menu_item_parent'] = 'post';
+			if ( 'post_type' === $meta['_menu_item_type'][0] ) {
+				$keys['_menu_item_object_id'] = 'post';
+			} elseif ( 'taxonomy' === $meta['_menu_item_type'][0] ) {
+				$keys['_menu_item_object_id'] = 'term';
+			}
+		}
+
 		// ACF: every value "foo" has a sibling "_foo" holding its field key. Works for
 		// repeaters/flexible content too (e.g. "rows_0_image" + "_rows_0_image").
 		if ( function_exists( 'acf_get_field' ) ) {
