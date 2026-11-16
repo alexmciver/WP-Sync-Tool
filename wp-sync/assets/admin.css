@@ -54,3 +54,5 @@
 @media (max-width: 782px) { .wpsync-status { grid-template-columns: repeat(2, 1fr); } }
 
 .wpsync-version { font-size: 13px; color: #646970; font-weight: 400; margin-left: 4px; }
+.wpsync-bullets { list-style: disc; margin-left: 20px; }
+.wpsync-inline-form { margin: 12px 0; }

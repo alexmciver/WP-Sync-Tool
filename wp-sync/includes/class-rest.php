@@ -72,6 +72,18 @@ final class WPSync_Rest {
 			),
 		) );
 
+		$full = function ( $cb ) {
+			return function ( WP_REST_Request $r ) use ( $cb ) {
+				if ( ! WPSync_Full::allowed() ) {
+					return new WP_Error( 'wpsync_full_off', 'Full copies are switched off on this site.', array( 'status' => 403 ) );
+				}
+				return call_user_func( $cb, $r );
+			};
+		};
+		register_rest_route( self::NS, '/db-tables', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_tables' ) ), 'permission_callback' => $auth ) );
+		register_rest_route( self::NS, '/db-rows', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_rows' ) ), 'permission_callback' => $auth ) );
+		register_rest_route( self::NS, '/files', array( 'methods' => 'GET', 'callback' => $full( array( 'WPSync_Full', 'rest_files' ) ), 'permission_callback' => $auth ) );
+
 		register_rest_route( self::NS, '/object', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'object' ),
@@ -112,6 +124,9 @@ final class WPSync_Rest {
 			'upload_baseurl' => $uploads['baseurl'],
 			'last_id'        => (int) $wpdb->get_var( 'SELECT MAX(id) FROM ' . WPSync_Config::table() ),
 			'recording_since' => (string) get_option( 'wpsync_installed', '' ),
+			'full_copy'       => WPSync_Full::allowed(),
+			'wp_version'      => get_bloginfo( 'version' ),
+			'abspath'         => WPSync_Full::allowed() ? ABSPATH : '',
 		);
 	}
 

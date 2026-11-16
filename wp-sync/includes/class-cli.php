@@ -222,6 +222,48 @@ class WPSync_CLI {
 	}
 
 	/**
+	 * Replace this site's whole database (and optionally uploads) with a copy of live.
+	 *
+	 * Backs up first. Keeps this site's URL, WP Sync connection and search-engine setting.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--skip-files]
+	 * : Don't copy live's uploads folder.
+	 *
+	 * [--yes]
+	 * : Don't ask for confirmation.
+	 *
+	 * @subcommand clone
+	 */
+	public function clone_( $args, $assoc ) {
+		WP_CLI::confirm( "Replace this site's WHOLE database with a copy of live? (It's backed up first.)", $assoc );
+		$state = WPSync_Full::start( array( 'files' => ! \WP_CLI\Utils\get_flag_value( $assoc, 'skip-files', false ) ) );
+		if ( is_wp_error( $state ) ) {
+			WP_CLI::error( $state->get_error_message() );
+		}
+		$last = '';
+		do {
+			$state = WPSync_Full::step( $state, 3 );
+			if ( is_wp_error( $state ) ) {
+				WP_CLI::error( $state->get_error_message() . ' Nothing on this site was changed.' );
+			}
+			$line = $state['activity'] . ' · ' . $state['rows_done'] . ' rows' . ( $state['files_got'] ? ' · ' . $state['files_got'] . ' files' : '' );
+			if ( $line !== $last ) {
+				WP_CLI::log( $line );
+				$last = $line;
+			}
+		} while ( ! $state['done'] );
+		foreach ( $state['errors'] as $e ) {
+			WP_CLI::warning( $e );
+		}
+		if ( $state['backup_file'] ) {
+			WP_CLI::log( 'Previous database backed up to ' . basename( $state['backup_file'] ) );
+		}
+		WP_CLI::success( sprintf( 'This site is now a copy of live: %d tables, %d rows, %d files downloaded. Log in with your live username and password.', count( $state['tables'] ), $state['rows_done'], $state['files_got'] ) );
+	}
+
+	/**
 	 * Undo a pull: restore a backup taken before it.
 	 *
 	 * ## OPTIONS

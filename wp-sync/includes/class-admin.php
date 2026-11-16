@@ -15,7 +15,7 @@ final class WPSync_Admin {
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
 		add_action( 'admin_post_wpsync_save', array( __CLASS__, 'save' ) );
-		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore' ) as $a ) {
+		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore', 'full' ) as $a ) {
 			add_action( 'wp_ajax_wpsync_' . $a, array( __CLASS__, 'ajax_' . $a ) );
 		}
 	}
@@ -69,6 +69,9 @@ final class WPSync_Admin {
 			delete_option( 'wpsync_remote' );
 			delete_option( 'wpsync_remote_secret' );
 			$msg = 'disconnected';
+		} elseif ( 'fullcopy' === $do && ! defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
+			update_option( 'wpsync_allow_full_copy', empty( $_POST['allow'] ) ? 'no' : 'yes', false );
+			$msg = 'saved';
 		} elseif ( 'generate' === $do && ! defined( 'WPSYNC_SECRET' ) ) {
 			update_option( 'wpsync_secret', bin2hex( random_bytes( 32 ) ), false );
 			$msg = 'key';
@@ -99,6 +102,7 @@ final class WPSync_Admin {
 			'disconnected' => 'Disconnected from live.',
 			'key'          => 'New key generated. Copy it into your local site.',
 			'restored'     => 'Backup restored. You may need to log in again if you were logged out.',
+			'saved'        => 'Saved.',
 		);
 		if ( ! isset( $msg ) ) {
 			$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : ( isset( $_GET['restored'] ) ? 'restored' : '' );
@@ -229,6 +233,28 @@ final class WPSync_Admin {
 		</div>
 
 		<div class="wpsync-card">
+			<details id="wpsync-full-card">
+				<summary><h2>Copy everything from live</h2></summary>
+				<p>Replaces this site's <strong>whole database</strong> with a copy of live: posts, pages, menus, settings, Divi Theme Builder and Library, widgets, users and plugin data. Live URLs are switched to <code><?php echo esc_html( home_url() ); ?></code>. Use it to start fresh, or when this copy has drifted too far from live.</p>
+				<ul class="wpsync-bullets">
+					<li>Your current database is backed up first (restore it any time under <em>Undo a pull or copy</em>).</li>
+					<li>Nothing here changes until the very end, so you can cancel safely while it runs.</li>
+					<li>Kept as they are here: this site's address, its WP Sync connection and "Discourage search engines".</li>
+					<li>Theme and plugin <em>files</em> aren't copied – keep those in Git.</li>
+					<li>Afterwards, log in with your <strong>live site's</strong> username and password.</li>
+				</ul>
+				<p><label><input type="checkbox" id="wpsync-full-files" checked> Also copy the uploads folder (images and other files; only missing or changed files are downloaded)</label></p>
+				<p><button type="button" class="button" id="wpsync-full-start">Copy everything from live…</button>
+				<button type="button" class="button-link wpsync-danger" id="wpsync-full-cancel" hidden>Cancel</button></p>
+				<div id="wpsync-full-progress" class="wpsync-progress" hidden>
+					<div class="wpsync-bar"><span></span></div>
+					<p class="wpsync-progress-text"></p>
+				</div>
+				<div id="wpsync-full-result"></div>
+			</details>
+		</div>
+
+		<div class="wpsync-card">
 			<h2>Conflicts <span class="count" id="wpsync-conflict-count">(<?php echo (int) count( $conflicts ); ?>)</span></h2>
 			<p class="description">Items changed on live <em>and</em> here since they were last pulled. They were left as they are here until you choose.</p>
 			<div id="wpsync-conflicts"><?php self::conflicts_table( $conflicts ); ?></div>
@@ -237,8 +263,8 @@ final class WPSync_Admin {
 		<?php $backups = WPSync_Backup::all(); ?>
 		<div class="wpsync-card">
 			<details id="wpsync-backups" <?php echo isset( $_GET['restored'] ) ? 'open' : ''; ?>>
-				<summary><h2>Undo a pull</h2></summary>
-				<p class="description">A backup is taken before every pull. Restoring one puts this site's posts, pages, media library, categories, users and settings back exactly as they were at that moment (media files that were downloaded stay in the uploads folder).</p>
+				<summary><h2>Undo a pull or copy</h2></summary>
+				<p class="description">A backup is taken before every pull and every full copy. Restoring one puts this site's posts, pages, media library, categories, users and settings back exactly as they were at that moment (media files that were downloaded stay in the uploads folder).</p>
 				<?php if ( ! $backups ) : ?>
 					<p class="wpsync-empty">No backups yet.</p>
 				<?php else : ?>
@@ -338,6 +364,14 @@ final class WPSync_Admin {
 			</form>
 			<?php endif; ?>
 
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wpsync-inline-form">
+				<?php wp_nonce_field( 'wpsync_save' ); ?>
+				<input type="hidden" name="action" value="wpsync_save">
+				<input type="hidden" name="do" value="fullcopy">
+				<label><input type="checkbox" name="allow" value="1" <?php checked( WPSync_Full::allowed() ); ?> <?php disabled( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ); ?> onchange="this.form.submit()">
+				Allow <strong>Copy everything</strong> from this site</label><br>
+				<span class="description">Lets a site with the key download this site's whole database and uploads (including users and settings). Switch off if you only want content pulls.</span>
+			</form>
 			<p class="description">Changes recorded on this site: <?php echo (int) $count; ?>. Pulling never writes anything to this site; the key only allows reading content.</p>
 			<?php if ( $collapsed ) : ?></details><?php endif; ?>
 		</div>
@@ -442,6 +476,58 @@ final class WPSync_Admin {
 		delete_transient( 'wpsync_run_' . get_current_user_id() );
 		WPSync_Puller::cancel();
 		wp_send_json_success( array( 'message' => 'Stopped. Everything up to the last finished batch is kept; pull again to continue.' ) );
+	}
+
+	public static function ajax_full() {
+		self::guard();
+		$tkey = 'wpsync_full_' . get_current_user_id();
+		$step = isset( $_POST['step'] ) ? sanitize_key( wp_unslash( $_POST['step'] ) ) : '';
+		if ( 'cancel' === $step ) {
+			delete_transient( $tkey );
+			WPSync_Full::request_cancel(); // The running step stops itself and cleans up.
+			wp_send_json_success( array( 'message' => 'Cancelled. Nothing on this site was changed.' ) );
+		}
+		if ( 'start' === $step ) {
+			delete_transient( $tkey );
+			$state = WPSync_Full::start( array( 'files' => ! empty( $_POST['files'] ) ) );
+		} else {
+			$state = get_transient( $tkey );
+			if ( ! $state ) {
+				wp_send_json_error( array( 'message' => 'This copy session expired. Start again (nothing was changed).' ) );
+			}
+		}
+		if ( is_wp_error( $state ) ) {
+			wp_send_json_error( array( 'message' => $state->get_error_message(), 'code' => $state->get_error_code() ) );
+		}
+		$login = wp_login_url( self::url() );
+		$state = WPSync_Full::step( $state );
+		if ( is_wp_error( $state ) ) {
+			delete_transient( $tkey );
+			wp_send_json_error( array( 'message' => $state->get_error_message(), 'code' => $state->get_error_code() ) );
+		}
+		if ( ! $state['done'] ) {
+			set_transient( $tkey, $state, HOUR_IN_SECONDS );
+		}
+		$pct = 0;
+		if ( 'tables' === $state['phase'] && $state['rows_total'] ) {
+			$pct = 5 + 70 * min( 1, $state['rows_done'] / $state['rows_total'] );
+		} elseif ( 'files' === $state['phase'] ) {
+			$pct = 75 + 23 * ( $state['files_total'] ? min( 1, $state['files_done'] / $state['files_total'] ) : 0 );
+		} elseif ( $state['done'] ) {
+			$pct = 100;
+		}
+		wp_send_json_success( array(
+			'done'      => $state['done'],
+			'activity'  => $state['activity'],
+			'pct'       => round( $pct ),
+			'tables'    => count( $state['tables'] ),
+			'rows'      => $state['rows_done'],
+			'files_got' => $state['files_got'],
+			'errors'    => array_slice( $state['errors'], 0, 20 ),
+			'backup'    => $state['backup_file'] ? basename( $state['backup_file'] ) : '',
+			'notices'   => ! empty( $state['notices'] ) && 'start' === $step ? $state['notices'] : array(),
+			'login'     => $login,
+		) );
 	}
 
 	public static function ajax_restore() {

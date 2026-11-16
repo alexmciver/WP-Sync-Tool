@@ -47,6 +47,19 @@ That's it. The local screen now shows how many changes are waiting on live.
 | `wp sync key` | (on live) show or generate this site's key |
 | `wp sync connect <url> <key>` | (on local) connect without the admin screen |
 
+## Copy everything from live
+
+**Tools → WP Sync → Copy everything from live** (or `wp sync clone`) replaces this site's whole database with a copy of live – content, menus, settings, Divi Theme Builder/Library, widgets, users, plugin data – and downloads any missing or changed files from live's uploads folder.
+
+- Your current database is fully backed up first (restore under **Undo a pull or copy**).
+- Everything is loaded into temporary tables and switched in at the very end, so **Cancel** at any point leaves this site untouched.
+- Live URLs and server paths are rewritten, including inside serialized and JSON data; a different table prefix is handled.
+- Kept from this site: its URL, its WP Sync connection, and "Discourage search engines".
+- If live runs a different WordPress version, the database is brought in line automatically (and you're warned if live is newer).
+- Afterwards log in with your **live** username and password. Normal pulls then continue from that point.
+- Theme and plugin code isn't copied – keep that in Git.
+- On live, **Allow Copy everything from this site** (Tools → WP Sync) can switch this off; it's on by default.
+
 ## When to copy, and catch-up mode
 
 WP Sync records changes on live from the moment it's installed there.
@@ -66,9 +79,9 @@ WP Sync records changes on live from the moment it's installed there.
 
 **Safety during a pull:** no emails, pingbacks or Woo webhooks are sent from the local site; a database backup is made first (kept in `wp-content/wpsync-backups/`, last 10); only one pull runs at a time.
 
-## Undo a pull
+## Undo a pull or copy
 
-**Tools → WP Sync → Undo a pull** lists the backups taken before each pull (last 10), each with a **Restore** button. Restoring first backs up the current state, so a restore can be undone too. Terminal: `wp sync backups` and `wp sync restore [<file>]`.
+**Tools → WP Sync → Undo a pull or copy** lists the backups taken before each pull or full copy (last 10), each with a **Restore** button. Restoring first backs up the current state, so a restore can be undone too. Terminal: `wp sync backups` and `wp sync restore [<file>]`.
 
 ## Restoring a backup by hand
 

@@ -113,7 +113,7 @@
 			notices.innerHTML = '';
 			( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
 			var rec = $( '#wpsync-recording' );
-			if ( rec && d.recording_since ) {
+			if ( rec && d.recording_since && d.never_pulled ) {
 				rec.hidden = false;
 				rec.textContent = 'Live has been recording changes since ' + d.recording_since + '. Content that differed before then needs "Pull all content from live" (More options).';
 			}
@@ -312,6 +312,65 @@
 			window.alert( err.message );
 		} );
 	} );
+
+	/* -------------------------------------------------- Copy everything from live */
+
+	var fullBtn = $( '#wpsync-full-start' );
+	if ( fullBtn ) {
+		var fullCancel = $( '#wpsync-full-cancel' );
+		var fullProg = $( '#wpsync-full-progress' );
+		var fullRes = $( '#wpsync-full-result' );
+		var fullStop = false;
+		var setFull = function ( pct, text ) {
+			$( '.wpsync-bar span', fullProg ).style.width = Math.max( 2, pct ) + '%';
+			$( '.wpsync-progress-text', fullProg ).textContent = text;
+		};
+		fullCancel.addEventListener( 'click', function () {
+			fullStop = true;
+			fullCancel.hidden = true;
+			setFull( 0, 'Cancelling…' );
+			post( 'wpsync_full', { step: 'cancel' } ).catch( function () {} ); // Stops the running step on the server.
+		} );
+		fullBtn.addEventListener( 'click', function () {
+			if ( running ) { return; }
+			if ( ! window.confirm( 'Replace this site\'s WHOLE database with a copy of live?\n\nEverything here (content, settings, users) becomes what\'s on live. Your current database is backed up first and can be restored from "Undo a pull or copy".\n\nAfterwards, log in with your live site\'s username and password.' ) ) { return; }
+			running = true; fullStop = false;
+			fullBtn.disabled = btnPull.disabled = btnPreview.disabled = true;
+			fullCancel.hidden = false; fullProg.hidden = false; fullRes.innerHTML = '';
+			var t0 = Date.now();
+			setFull( 2, 'Connecting to live…' );
+			window.onbeforeunload = function () { return 'A copy is running.'; };
+			var next = function ( p ) {
+				if ( fullStop ) {
+					var e = new Error( 'Cancelled. Nothing on this site was changed.' ); e.code = 'cancelled';
+					return Promise.reject( e );
+				}
+				return post( 'wpsync_full', p, 300000 ).then( function ( d ) {
+					( d.notices || [] ).forEach( function ( m ) { notice( fullRes, 'info', m ); } );
+					var secs = Math.round( ( Date.now() - t0 ) / 1000 );
+					setFull( d.pct, d.activity + ' · ' + d.rows.toLocaleString() + ' rows' + ( d.files_got ? ' · ' + d.files_got + ' files downloaded' : '' ) + ' · ' + ( secs < 60 ? secs + 's' : Math.floor( secs / 60 ) + 'm ' + ( secs % 60 ) + 's' ) );
+					return d.done ? d : next( { step: 'next' } );
+				} );
+			};
+			next( { step: 'start', files: $( '#wpsync-full-files' ).checked ? 1 : '' } ).then( function ( d ) {
+				window.onbeforeunload = null;
+				var n = notice( fullRes, 'success', 'Done: this site is now a copy of live (' + d.tables + ' tables, ' + d.rows.toLocaleString() + ' rows' + ( d.files_got ? ', ' + d.files_got + ' files downloaded' : '' ) + '). From now on, normal pulls bring across only what changes on live. ' );
+				var a = el( 'a', 'button button-primary', 'Log in again (use your live username and password)' );
+				a.href = d.login;
+				n.querySelector( 'p' ).appendChild( a );
+				if ( d.errors && d.errors.length ) { fullRes.appendChild( list( 'Warnings', d.errors, 'is-warn' ) ); }
+			} ).catch( function ( e ) {
+				window.onbeforeunload = null;
+				var wasCancel = e.code === 'cancelled' || e.code === 'wpsync_cancelled';
+				notice( fullRes, wasCancel ? 'warning' : 'error', e.message );
+				fullBtn.disabled = btnPull.disabled = btnPreview.disabled = false;
+			} ).then( function () {
+				running = false;
+				fullCancel.hidden = true;
+				setTimeout( function () { fullProg.hidden = true; }, 600 );
+			} );
+		} );
+	}
 
 	/* --------------------------------------------------------------- Restore */
 
