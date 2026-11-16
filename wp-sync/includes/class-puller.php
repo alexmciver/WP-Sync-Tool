@@ -88,8 +88,8 @@ final class WPSync_Puller {
 		if ( $stored && $stored !== $remote['home'] && ! $allow_remote_change ) {
 			return new WP_Error( 'wpsync_remote_changed', "Last pull was from {$stored}, but the live URL is now {$remote['home']}. Use catch-up mode (pick a date) to start fresh." );
 		}
-		if ( ! get_option( 'wpsync_cursor' ) && ! get_option( 'wpsync_clone_floor' ) ) {
-			$notices[] = 'First pull: this brings everything changed on live since WP Sync was installed there. If your local copy is older than that, use catch-up mode with the date you made the copy.';
+		if ( ! get_option( 'wpsync_full_synced' ) && ! get_option( 'wpsync_clone_floor' ) && ! get_option( 'wpsync_last_pull' ) ) {
+			$notices[] = 'First time? A normal pull only brings changes made on live since WP Sync was installed there. To bring across everything that already differs, tick "Pull all content from live" under More options.';
 		}
 		return $remote;
 	}
@@ -277,6 +277,9 @@ final class WPSync_Puller {
 				self::save_cursor( (int) $state['remote']['last_id'], $state['remote'] );
 			}
 			update_option( 'wpsync_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
+			if ( 'scan' === $state['mode'] && $state['since'] <= '2000-01-01' ) {
+				update_option( 'wpsync_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
+			}
 			self::after_pull( $state['report'] );
 		}
 		self::unlock( $state );

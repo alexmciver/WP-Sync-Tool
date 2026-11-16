@@ -165,6 +165,7 @@ final class WPSync_Admin {
 				<span class="wpsync-remote"><?php echo esc_html( WPSync_Config::remote() ); ?></span>
 			</div>
 
+			<p id="wpsync-recording" class="description" hidden></p>
 			<div id="wpsync-status" class="wpsync-status is-loading"><span class="spinner is-active"></span> Checking live site…</div>
 			<div id="wpsync-notices"></div>
 
@@ -177,9 +178,13 @@ final class WPSync_Admin {
 			<details class="wpsync-advanced">
 				<summary>More options</summary>
 				<p>
-					<label><strong>Catch-up from date</strong><br>
+					<label><input type="checkbox" id="wpsync-all"> <strong>Pull all content from live</strong> (first sync)</label><br>
+					<span class="description">Compares every post, page, media item and category on live, not just changes recorded since WP Sync was installed. Your local edits are still kept as conflicts.</span>
+				</p>
+				<p>
+					<label><strong>Or catch up from a date</strong><br>
 					<input type="date" id="wpsync-since"></label><br>
-					<span class="description">Use once if your local copy was made before WP Sync was installed on live: pulls everything changed on live since that date.</span>
+					<span class="description">Pulls everything changed on live since that date, e.g. the day you made your local copy.</span>
 				</p>
 				<p>
 					<label><input type="checkbox" id="wpsync-theirs"> Let live win all conflicts</label><br>
@@ -317,6 +322,8 @@ final class WPSync_Admin {
 			'local'      => count( WPSync_Importer::locally_changed() ),
 			'conflicts'  => count( WPSync_Puller::conflicts() ),
 			'notices'    => $notices,
+			'recording_since' => ! empty( $remote['recording_since'] ) ? wp_date( 'j M Y, H:i', strtotime( $remote['recording_since'] . ' UTC' ) ) : '',
+			'never_pulled'    => ! get_option( 'wpsync_last_pull' ) || ! get_option( 'wpsync_full_synced' ),
 		) );
 	}
 
@@ -332,7 +339,7 @@ final class WPSync_Admin {
 				'dry_run'    => ! empty( $_POST['dry'] ),
 				'theirs'     => ! empty( $_POST['theirs'] ),
 				'redownload' => ! empty( $_POST['redownload'] ),
-				'since'      => isset( $_POST['since'] ) ? sanitize_text_field( wp_unslash( $_POST['since'] ) ) : '',
+				'since'      => ! empty( $_POST['all'] ) ? '1970-01-01' : ( isset( $_POST['since'] ) ? sanitize_text_field( wp_unslash( $_POST['since'] ) ) : '' ),
 			) );
 			if ( is_wp_error( $state ) ) {
 				wp_send_json_error( array( 'message' => $state->get_error_message(), 'code' => $state->get_error_code() ) );

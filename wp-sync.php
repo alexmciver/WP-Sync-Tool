@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Sync (change puller)
  * Description: Pull content your client adds or edits on the live site into your local copy without overwriting your own work. Tools → WP Sync, or `wp sync` in the terminal. Install and activate on BOTH live and local (normal plugin or must-use plugin).
- * Version: 0.2.2
+ * Version: 0.2.3
  * Author: Alex M Web Design
  * Requires PHP: 7.4
  *

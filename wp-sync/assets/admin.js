@@ -112,6 +112,11 @@
 			statusBox.appendChild( stat( 'last pull', d.last_pull ) );
 			notices.innerHTML = '';
 			( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
+			var rec = $( '#wpsync-recording' );
+			if ( rec && d.recording_since ) {
+				rec.hidden = false;
+				rec.textContent = 'Live has been recording changes since ' + d.recording_since + '. Content that differed before then needs "Pull all content from live" (More options).';
+			}
 			btnPreview.disabled = btnPull.disabled = false;
 		} ).catch( function ( e ) {
 			statusBox.className = 'wpsync-status is-error';
@@ -223,7 +228,8 @@
 			dry: dry ? 1 : '',
 			theirs: $( '#wpsync-theirs' ).checked ? 1 : '',
 			redownload: $( '#wpsync-redownload' ).checked ? 1 : '',
-			since: $( '#wpsync-since' ).value || ''
+			since: $( '#wpsync-since' ).value || '',
+			all: $( '#wpsync-all' ).checked ? 1 : ''
 		};
 
 		function next( p ) {
@@ -242,6 +248,7 @@
 				$( '#wpsync-conflicts' ).innerHTML = d.conflicts_html;
 				$( '#wpsync-conflict-count' ).textContent = '(' + d.conflict_count + ')';
 				$( '#wpsync-since' ).value = '';
+				$( '#wpsync-all' ).checked = false;
 				loadLocal();
 			}
 		} ).catch( function ( e ) {

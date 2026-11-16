@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.2.2';
+	const VERSION  = '0.2.3';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -193,6 +193,11 @@ final class WPSync_Config {
 			) {$charset};"
 		);
 		self::site_key();
+		if ( ! get_option( 'wpsync_installed' ) ) {
+			global $wpdb;
+			$first = $wpdb->get_var( 'SELECT MIN(created_at) FROM ' . $table );
+			add_option( 'wpsync_installed', $first ? $first : gmdate( 'Y-m-d H:i:s' ), '', false );
+		}
 		if ( ! get_option( 'wpsync_fingerprint' ) ) {
 			update_option( 'wpsync_fingerprint', md5( untrailingslashit( home_url() ) ), true );
 		}
