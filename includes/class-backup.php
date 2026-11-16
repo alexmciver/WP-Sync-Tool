@@ -20,7 +20,8 @@ final class LivePull_Backup {
 	/**
 	 * Where backups live. Outside the public web folder when possible (e.g. the folder above
 	 * public_html / app/public), so they can never be downloaded even on servers that ignore
-	 * .htaccess (nginx). Otherwise wp-content/livepull-backups with deny rules and random names.
+	 * .htaccess (nginx). Otherwise wp-content/livepull-backups-<random>: deny rules for
+	 * Apache/LiteSpeed/IIS, and on nginx an unguessable folder and file names.
 	 * Override with define( 'LIVEPULL_BACKUP_DIR', '/absolute/path' ).
 	 */
 	public static function dir() {
@@ -37,7 +38,7 @@ final class LivePull_Backup {
 			// One sub-folder per site: several sites can share the folder above them.
 			$candidates[] = $above . '/livepull-backups/' . self::site_folder();
 		}
-		$candidates[] = WP_CONTENT_DIR . '/livepull-backups';
+		$candidates[] = self::content_fallback();
 
 		foreach ( $candidates as $c ) {
 			if ( ( is_dir( $c ) || wp_mkdir_p( $c ) ) && wp_is_writable( $c ) ) {
@@ -46,7 +47,7 @@ final class LivePull_Backup {
 			}
 		}
 		if ( null === $dir ) {
-			$dir = WP_CONTENT_DIR . '/livepull-backups';
+			$dir = self::content_fallback();
 		}
 		self::protect( $dir );
 		if ( basename( dirname( $dir ) ) === 'livepull-backups' ) {
@@ -54,6 +55,21 @@ final class LivePull_Backup {
 		}
 		self::migrate_old( $dir );
 		return $dir;
+	}
+
+	/** wp-content/livepull-backups-<random>: the random part is created once per site. */
+	private static function content_fallback() {
+		$suffix = get_option( 'livepull_backup_suffix' );
+		if ( ! $suffix || ! preg_match( '/^[a-z0-9]{24}$/', $suffix ) ) {
+			$suffix = strtolower( wp_generate_password( 24, false ) );
+			update_option( 'livepull_backup_suffix', $suffix, false );
+		}
+		return WP_CONTENT_DIR . '/livepull-backups-' . $suffix;
+	}
+
+	/** Are backups inside the website's own folder (so only deny rules / random names protect them)? */
+	public static function in_web_root() {
+		return 0 === strpos( wp_normalize_path( self::dir() ), wp_normalize_path( untrailingslashit( ABSPATH ) ) . '/' );
 	}
 
 	/** Deny web access (Apache, LiteSpeed, IIS); harmless where the folder isn't web-reachable. */
@@ -74,6 +90,16 @@ final class LivePull_Backup {
 	/** Backups made by versions before 0.5.0: move here and give them unguessable names. */
 	private static function migrate_old( $dir ) {
 		$old = WP_CONTENT_DIR . '/livepull-backups';
+		if ( $old !== $dir && is_dir( $old ) ) {
+			foreach ( (array) glob( $old . '/pre-*' ) as $f ) {
+				if ( preg_match( self::NAME_RE, basename( $f ) ) ) {
+					LivePull_Config::fs()->move( $f, $dir . '/' . basename( $f ), false );
+				}
+			}
+			if ( ! glob( $old . '/pre-*' ) ) {
+				LivePull_Config::fs()->delete( $old, true );
+			}
+		}
 		foreach ( array_unique( array( $old, $dir ) ) as $from ) {
 			foreach ( (array) glob( $from . '/pre-pull-*' ) as $f ) {
 				if ( preg_match( '/^pre-(pull|copy)-(\d{8})-(\d{6})\.(sql(?:\.gz)?)$/', basename( $f ), $m ) ) {
@@ -98,14 +124,15 @@ final class LivePull_Backup {
 	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.sql(\.gz)?$/';
 
 	/** @return string|WP_Error Backup file path. */
-	public static function create( $full = false ) {
+	public static function create( $full = false, $keep = '' ) {
 		$dir = self::dir();
 
 		if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
-			$file = $dir . '/' . self::new_name( $full, false );
-			$res  = WP_CLI::runcommand( 'db export ' . escapeshellarg( $file ) . ' --quiet', array( 'return' => 'all', 'exit_error' => false, 'launch' => true ) );
+			$file   = $dir . '/' . self::new_name( $full, false );
+			$tables = $full ? '' : ' --tables=' . escapeshellarg( implode( ',', self::existing( self::tables( false ) ) ) );
+			$res    = WP_CLI::runcommand( 'db export ' . escapeshellarg( $file ) . $tables . ' --quiet', array( 'return' => 'all', 'exit_error' => false, 'launch' => true ) );
 			if ( 0 === $res->return_code ) {
-				self::prune();
+				self::prune( $keep );
 				return $file;
 			}
 			// Fall through to the PHP dump (e.g. mysqldump missing).
@@ -116,8 +143,15 @@ final class LivePull_Backup {
 		if ( is_wp_error( $res ) ) {
 			return $res;
 		}
-		self::prune();
+		self::prune( $keep );
 		return $file;
+	}
+
+	private static function existing( array $tables ) {
+		global $wpdb;
+		return array_values( array_filter( $tables, function ( $t ) use ( $wpdb ) {
+			return $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $t ) ) ) === $t;
+		} ) );
 	}
 
 	private static function tables( $full = false ) {
@@ -126,10 +160,11 @@ final class LivePull_Backup {
 			$all = (array) $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $wpdb->prefix ) . '%' ) );
 			return array_values( array_filter( $all, function ( $t ) use ( $wpdb ) {
 				$n = substr( $t, strlen( $wpdb->prefix ) );
-				return 0 !== strpos( $n, 'lpulltmp_' ) && 0 !== strpos( $n, 'lpullold_' );
+				return 0 !== strpos( $n, 'lpulltmp_' ) && 0 !== strpos( $n, 'lpullold_' ) && 0 !== strpos( $n, 'lprst_' );
 			} ) );
 		}
-		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->users, $wpdb->usermeta, $wpdb->options, LivePull_Config::table() );
+		// Pulls never create or change users, so pull backups leave out users and password hashes.
+		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->options, LivePull_Config::table() );
 		if ( function_exists( 'wc_get_attribute_taxonomies' ) ) {
 			$tables[] = $wpdb->prefix . 'woocommerce_attribute_taxonomies';
 			$tables[] = $wpdb->prefix . 'wc_product_meta_lookup';
@@ -263,10 +298,13 @@ final class LivePull_Backup {
 		return $done;
 	}
 
-	private static function prune() {
-		$all = self::all();
-		foreach ( array_slice( $all, self::KEEP ) as $b ) {
-			@unlink( $b['file'] ); // phpcs:ignore
+	/** Keep the newest backups, plus $keep (the backup about to be restored). */
+	private static function prune( $keep = '' ) {
+		$all = array_values( array_filter( self::all(), function ( $b ) use ( $keep ) {
+			return ! $keep || wp_normalize_path( $b['file'] ) !== wp_normalize_path( $keep );
+		} ) );
+		foreach ( array_slice( $all, $keep ? self::KEEP - 1 : self::KEEP ) as $b ) {
+			wp_delete_file( $b['file'] );
 		}
 	}
 
@@ -301,8 +339,14 @@ final class LivePull_Backup {
 		return file_exists( $file ) ? $file : null;
 	}
 
+	const RESTORE = 'lprst_';
+
 	/**
 	 * Put the database back to how it was in a backup (undo a pull).
+	 *
+	 * All or nothing: the backup is loaded into temporary copies of its tables, and only when
+	 * every statement has succeeded are they switched in, all at the same instant. If anything
+	 * fails, the temporary copies are dropped and this site is exactly as it was.
 	 * Reads statement by statement, so large backups don't need much memory.
 	 *
 	 * @return true|WP_Error
@@ -318,15 +362,19 @@ final class LivePull_Backup {
 			return new WP_Error( 'livepull_restore', 'Could not open ' . basename( $file ) );
 		}
 		$run = function ( $sql ) use ( $wpdb ) {
-			// Restoring a backup replays LivePull's own SQL file exactly. $wpdb->query() would refuse
-			// rows it can't validate against the table's character set, leaving a half-restored site.
+			// Restoring replays LivePull's own SQL file exactly. $wpdb->query() would refuse rows
+			// it can't validate against the table's character set.
 			if ( $wpdb->dbh instanceof mysqli ) {
 				return mysqli_query( $wpdb->dbh, $sql ) ? true : mysqli_error( $wpdb->dbh ); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_query, WordPress.DB.RestrictedFunctions.mysql_mysqli_error
 			}
-			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore
+			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		};
+		self::drop_restore_tables();
 		$run( 'SET FOREIGN_KEY_CHECKS=0' );
-		$buf = '';
+		$tables = array();
+		$tag    = substr( md5( (string) microtime( true ) ), 0, 4 );
+		$buf    = '';
+		$error  = '';
 		while ( true ) {
 			$line = $gz ? gzgets( $fh ) : fgets( $fh );
 			if ( false === $line ) {
@@ -337,20 +385,99 @@ final class LivePull_Backup {
 			}
 			$buf .= $line;
 			if ( ';' === substr( rtrim( $line ), -1 ) ) {
-				$ok = $run( $buf );
+				$ok = $run( self::to_restore_tables( $buf, $tables, $tag ) );
 				if ( true !== $ok ) {
-					$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
-					return new WP_Error( 'livepull_restore', 'Restore stopped with a database error: ' . $ok . '. The database may be partly restored; try again, or import the file with your usual tool.' );
+					$error = $ok;
+					break;
 				}
 				$buf = '';
 			}
 		}
 		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
+		if ( ! $error && ! $tables ) {
+			$error = 'the file contains no tables';
+		}
+
+		if ( ! $error ) {
+			// Switch every restored table in at once; keep the current ones until that worked.
+			$renames = array();
+			$olds    = array();
+			foreach ( $tables as $real => $tmp ) {
+				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $real ) ) ) === $real ) {
+					$old       = self::restore_name( $real, 'old' );
+					$renames[] = '`' . $real . '` TO `' . $old . '`';
+					$olds[]    = $old;
+				}
+				$renames[] = '`' . $tmp . '` TO `' . $real . '`';
+			}
+			$ok = $run( 'RENAME TABLE ' . implode( ', ', $renames ) );
+			if ( true !== $ok ) {
+				$error = $ok;
+			} else {
+				foreach ( $olds as $old ) {
+					$run( 'DROP TABLE IF EXISTS `' . $old . '`' );
+				}
+			}
+		}
+		if ( $error ) {
+			self::drop_restore_tables();
+		}
 		$run( 'SET FOREIGN_KEY_CHECKS=1' );
 		wp_cache_flush();
+		if ( $error ) {
+			return new WP_Error( 'livepull_restore', 'Restore stopped with a database error, so nothing was changed: ' . $error );
+		}
 		// Backups are taken at the start of a pull, so they contain that pull's lock.
 		delete_transient( 'livepull_lock' );
 		return true;
+	}
+
+	/** Temporary name for a table being restored (or for the table it replaces). */
+	private static function restore_name( $table, $kind = 'new' ) {
+		global $wpdb;
+		$rest = substr( $table, strlen( $wpdb->prefix ) );
+		$name = $wpdb->prefix . self::RESTORE . ( 'old' === $kind ? 'o_' : 'n_' ) . $rest;
+		return strlen( $name ) <= 64 ? $name : $wpdb->prefix . self::RESTORE . ( 'old' === $kind ? 'o_' : 'n_' ) . substr( md5( $rest ), 0, 20 );
+	}
+
+	/** Point a backup statement at the temporary copy of its table. */
+	private static function to_restore_tables( $sql, array &$tables, $tag ) {
+		global $wpdb;
+		$prefix = $wpdb->prefix;
+		$map    = function ( $name ) use ( &$tables, $prefix ) {
+			if ( 0 !== strpos( $name, $prefix ) || 0 === strpos( $name, $prefix . self::RESTORE ) ) {
+				return $name;
+			}
+			if ( ! isset( $tables[ $name ] ) ) {
+				$tables[ $name ] = self::restore_name( $name );
+			}
+			return $tables[ $name ];
+		};
+		$sql = preg_replace_callback(
+			'/^(\s*(?:\/\*!\d+\s+)?(?:DROP TABLE IF EXISTS|DROP TABLE|CREATE TABLE IF NOT EXISTS|CREATE TABLE|INSERT INTO|INSERT IGNORE INTO|REPLACE INTO|LOCK TABLES|ALTER TABLE)\s+)`([^`]+)`/i',
+			function ( $m ) use ( $map ) {
+				return $m[1] . '`' . $map( $m[2] ) . '`';
+			},
+			$sql,
+			1
+		);
+		if ( preg_match( '/^\s*CREATE TABLE/i', $sql ) ) {
+			// Foreign keys: point at the temporary tables, and give constraints unique names.
+			$sql = preg_replace_callback( '/REFERENCES\s+`([^`]+)`/i', function ( $m ) use ( $map ) {
+				return 'REFERENCES `' . $map( $m[1] ) . '`';
+			}, $sql );
+			$sql = preg_replace_callback( '/CONSTRAINT\s+`([^`]+)`/i', function ( $m ) use ( $tag ) {
+				return 'CONSTRAINT `' . substr( $m[1], 0, 56 ) . '_r' . $tag . '`';
+			}, $sql );
+		}
+		return $sql;
+	}
+
+	private static function drop_restore_tables() {
+		global $wpdb;
+		foreach ( (array) $wpdb->get_col( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $wpdb->prefix . self::RESTORE ) . '%' ) ) as $t ) {
+			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $t ) );
+		}
 	}
 
 	public static function latest() {

@@ -39,7 +39,8 @@ final class LivePull_Admin {
 		// Works whether installed as a normal plugin or a must-use plugin.
 		$base = plugins_url( 'assets/', LIVEPULL_FILE );
 		wp_enqueue_style( 'livepull-admin', $base . 'admin.css', array(), LivePull_Config::VERSION );
-		wp_enqueue_script( 'livepull-admin', $base . 'admin.js', array(), LivePull_Config::VERSION, true );
+		wp_enqueue_script( 'livepull-admin', $base . 'admin.js', array( 'wp-i18n' ), LivePull_Config::VERSION, true );
+		wp_set_script_translations( 'livepull-admin', 'livepull' );
 		wp_localize_script( 'livepull-admin', 'LIVEPULL', array(
 			'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'livepull' ),
@@ -56,7 +57,7 @@ final class LivePull_Admin {
 
 	public static function save() {
 		if ( ! current_user_can( self::CAP ) ) {
-			wp_die( 'Not allowed.' );
+			wp_die( esc_html__( 'Not allowed.', 'livepull' ) );
 		}
 		check_admin_referer( 'livepull_save' );
 		$do  = isset( $_POST['do'] ) ? sanitize_key( wp_unslash( $_POST['do'] ) ) : '';
@@ -125,22 +126,22 @@ final class LivePull_Admin {
 		}
 		$configured = (bool) LivePull_Config::remote();
 		$msgs       = array(
-			'connected'    => 'Connection saved. Checking live…',
-			'disconnected' => 'Disconnected from live.',
-			'key'          => 'New key generated. Copy it into your local site.',
-			'restored'     => 'Backup restored. You may need to log in again if you were logged out.',
-			'saved'        => 'Saved.',
-			'badcode'      => 'That connection code isn\'t valid. Copy it again from Tools → LivePull on the live site (use the Copy button).',
-			'nourl'        => 'Paste the connection code from the live site, or fill in its URL and key.',
+			'connected'    => __( 'Connection saved. Checking live…', 'livepull' ),
+			'disconnected' => __( 'Disconnected from live.', 'livepull' ),
+			'key'          => __( 'New key generated. Copy it into your local site.', 'livepull' ),
+			'restored'     => __( 'Backup restored. You may need to log in again if you were logged out.', 'livepull' ),
+			'saved'        => __( 'Saved.', 'livepull' ),
+			'badcode'      => __( 'That connection code isn\'t valid. Copy it again from Tools → LivePull on the live site (use the Copy button).', 'livepull' ),
+			'nourl'        => __( 'Paste the connection code from the live site, or fill in its URL and key.', 'livepull' ),
 		);
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only picks which fixed message to show after a redirect.
 		$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : ( isset( $_GET['restored'] ) ? 'restored' : '' );
 		?>
 		<div class="wrap livepull">
-			<h1>LivePull <span class="livepull-version">v<?php echo esc_html( LivePull_Config::VERSION ); ?></span>
+			<h1><?php esc_html_e( 'LivePull', 'livepull' ); ?> <span class="livepull-version">v<?php echo esc_html( LivePull_Config::VERSION ); ?></span>
 				<?php do_action( 'livepull_admin_title_actions' ); ?>
 			</h1>
-			<p class="livepull-lead">Pull content your client adds or edits on the live site into this copy, without overwriting your own work.</p>
+			<p class="livepull-lead"><?php esc_html_e( 'Pull content your client adds or edits on the live site into this copy, without overwriting your own work.', 'livepull' ); ?></p>
 			<?php do_action( 'livepull_admin_notices' ); ?>
 			<?php if ( isset( $msgs[ $msg ] ) ) : ?>
 				<div class="notice notice-<?php echo in_array( $msg, array( 'badcode', 'nourl' ), true ) ? 'error' : 'success'; ?> is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
@@ -157,10 +158,10 @@ final class LivePull_Admin {
 			}
 			if ( count( $copies ) > 1 ) :
 				?>
-				<div class="notice notice-warning"><p><strong>LivePull is installed more than once</strong> (<?php echo esc_html( implode( ', ', array_map( function ( $f, $v ) { return dirname( $f ) . ' v' . $v; }, array_keys( $copies ), $copies ) ) ); ?>). Only the copy in <code><?php echo esc_html( dirname( plugin_basename( LIVEPULL_FILE ) ) ); ?></code> is running. Delete the others on the <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>">Plugins</a> screen (deactivate first) so updates go to the right one.</p></div>
+				<div class="notice notice-warning"><p><strong><?php esc_html_e( 'LivePull is installed more than once', 'livepull' ); ?></strong> (<?php echo esc_html( implode( ', ', array_map( function ( $f, $v ) { return dirname( $f ) . ' v' . $v; }, array_keys( $copies ), $copies ) ) ); ?><?php esc_html_e( '). Only the copy in', 'livepull' ); ?> <code><?php echo esc_html( dirname( plugin_basename( LIVEPULL_FILE ) ) ); ?></code> <?php esc_html_e( 'is running. Delete the others on the', 'livepull' ); ?> <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>"><?php esc_html_e( 'Plugins', 'livepull' ); ?></a> <?php esc_html_e( 'screen (deactivate first) so updates go to the right one.', 'livepull' ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( is_multisite() ) : ?>
-				<div class="notice notice-warning"><p>Multisite networks are not supported yet.</p></div>
+				<div class="notice notice-warning"><p><?php esc_html_e( 'Multisite networks are not supported yet.', 'livepull' ); ?></p></div>
 			<?php endif; ?>
 
 			<?php
@@ -180,8 +181,8 @@ final class LivePull_Admin {
 		?>
 		<div class="livepull-grid">
 			<div class="livepull-card">
-				<h2>Is this your local or staging copy?</h2>
-				<p>Connect it to the live site, then pull changes with one click.</p>
+				<h2><?php esc_html_e( 'Is this your local or staging copy?', 'livepull' ); ?></h2>
+				<p><?php esc_html_e( 'Connect it to the live site, then pull changes with one click.', 'livepull' ); ?></p>
 				<?php self::connect_form(); ?>
 			</div>
 			<?php self::render_source( false ); ?>
@@ -200,25 +201,25 @@ final class LivePull_Admin {
 			<input type="hidden" name="do" value="connect">
 			<?php if ( ! $remote_const && ! $key_const ) : ?>
 			<p>
-				<label for="livepull-code"><strong>Connection code</strong></label><br>
-				<input type="text" id="livepull-code" name="code" class="large-text code" autocomplete="off" placeholder="livepull1:… – copy it from Tools → LivePull on the live site">
-				<br><span class="description">Paste this and you're done. Or fill in the two fields below instead.</span>
+				<label for="livepull-code"><strong><?php esc_html_e( 'Connection code', 'livepull' ); ?></strong></label><br>
+				<input type="text" id="livepull-code" name="code" class="large-text code" autocomplete="off" placeholder="<?php esc_attr_e( 'livepull1:… – copy it from Tools → LivePull on the live site', 'livepull' ); ?>">
+				<br><span class="description"><?php esc_html_e( 'Paste this and you\'re done. Or fill in the two fields below instead.', 'livepull' ); ?></span>
 			</p>
 			<?php endif; ?>
 			<p>
-				<label for="livepull-remote"><strong>Live site URL</strong></label><br>
+				<label for="livepull-remote"><strong><?php esc_html_e( 'Live site URL', 'livepull' ); ?></strong></label><br>
 				<input type="url" id="livepull-remote" name="remote" class="regular-text" placeholder="https://www.example.co.uk"
 					value="<?php echo esc_attr( LivePull_Config::remote() ); ?>" <?php disabled( $remote_const ); ?>>
-				<?php if ( $remote_const ) : ?><br><span class="description">Set in wp-config.php (LIVEPULL_REMOTE).</span><?php endif; ?>
+				<?php if ( $remote_const ) : ?><br><span class="description"><?php esc_html_e( 'Set in wp-config.php (LIVEPULL_REMOTE).', 'livepull' ); ?></span><?php endif; ?>
 			</p>
 			<p>
-				<label for="livepull-key"><strong>Live site's LivePull key</strong></label><br>
+				<label for="livepull-key"><strong><?php esc_html_e( 'Live site\'s LivePull key', 'livepull' ); ?></strong></label><br>
 				<input type="password" id="livepull-key" name="remote_key" class="regular-text code" autocomplete="off"
-					placeholder="<?php echo esc_attr( $cur_key ? 'Paste a new key to replace it' : 'Paste from Tools → LivePull on the live site' ); ?>" <?php disabled( $key_const ); ?>>
-				<?php if ( $cur_key ) : ?><br><span class="description">Currently using the key ending <code><?php echo esc_html( LivePull_Config::key_hint( $cur_key ) ); ?></code> (<?php echo esc_html( $cur_from ); ?>).</span><?php endif; ?>
+					placeholder="<?php echo esc_attr( $cur_key ? __( 'Paste a new key to replace it', 'livepull' ) : __( 'Paste from Tools → LivePull on the live site', 'livepull' ) ); ?>" <?php disabled( $key_const ); ?>>
+				<?php if ( $cur_key ) : ?><br><span class="description"><?php esc_html_e( 'Currently using the key ending', 'livepull' ); ?> <code><?php echo esc_html( LivePull_Config::key_hint( $cur_key ) ); ?></code> (<?php echo esc_html( $cur_from ); ?>).</span><?php endif; ?>
 			</p>
 			<?php if ( ! $remote_const || ! $key_const ) : ?>
-				<p><button class="button button-primary"><?php echo LivePull_Config::remote() ? 'Save' : 'Save and connect'; ?></button></p>
+				<p><button class="button button-primary"><?php echo esc_html( LivePull_Config::remote() ? __( 'Save', 'livepull' ) : __( 'Save and connect', 'livepull' ) ); ?></button></p>
 			<?php endif; ?>
 		</form>
 		<?php
@@ -230,64 +231,64 @@ final class LivePull_Admin {
 		?>
 		<div class="livepull-card livepull-main">
 			<div class="livepull-head">
-				<h2>Pull from live</h2>
+				<h2><?php esc_html_e( 'Pull from live', 'livepull' ); ?></h2>
 				<span class="livepull-remote"><?php echo esc_html( LivePull_Config::remote() ); ?></span>
 			</div>
 
 			<p id="livepull-recording" class="description" hidden></p>
-			<div id="livepull-status" class="livepull-status is-loading"><span class="spinner is-active"></span> Checking live site…</div>
+			<div id="livepull-status" class="livepull-status is-loading"><span class="spinner is-active"></span> <?php esc_html_e( 'Checking live site…', 'livepull' ); ?></div>
 			<p id="livepull-last-summary" class="description" hidden></p>
 			<div id="livepull-notices"></div>
 
 			<div class="livepull-actions">
-				<button type="button" class="button button-hero" id="livepull-preview" disabled>Preview changes</button>
-				<button type="button" class="button button-primary button-hero" id="livepull-pull" disabled>Pull changes</button>
-				<button type="button" class="button-link livepull-danger" id="livepull-cancel" hidden>Cancel</button>
+				<button type="button" class="button button-hero" id="livepull-preview" disabled><?php esc_html_e( 'Preview changes', 'livepull' ); ?></button>
+				<button type="button" class="button button-primary button-hero" id="livepull-pull" disabled><?php esc_html_e( 'Pull changes', 'livepull' ); ?></button>
+				<button type="button" class="button-link livepull-danger" id="livepull-cancel" hidden><?php esc_html_e( 'Cancel', 'livepull' ); ?></button>
 			</div>
 
 			<details class="livepull-advanced livepull-what">
-				<summary>What gets pulled?</summary>
+				<summary><?php esc_html_e( 'What gets pulled?', 'livepull' ); ?></summary>
 				<div class="livepull-what-grid">
-					<div><strong>Every pull</strong>
+					<div><strong><?php esc_html_e( 'Every pull', 'livepull' ); ?></strong>
 						<ul class="livepull-bullets">
-							<li>Posts, pages and custom post types (incl. WooCommerce products)</li>
-							<li>Media library + files</li>
-							<li>Categories, tags and other taxonomies</li>
-							<li>Custom fields (ACF etc.) and page-builder content</li>
-							<li>Menus and menu locations<?php echo LivePull_Config::pull_menus() ? '' : ' <em>(switched off on this site)</em>'; ?></li>
-							<li>Site title, tagline, homepage, posts page, sticky posts, site icon, logo</li>
+							<li><?php esc_html_e( 'Posts, pages and custom post types (incl. WooCommerce products)', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Media library + files', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Categories, tags and other taxonomies', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Custom fields (ACF etc.) and page-builder content', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Menus and menu locations', 'livepull' ); ?><?php echo LivePull_Config::pull_menus() ? '' : ' <em>' . esc_html__( '(switched off on this site)', 'livepull' ) . '</em>'; ?></li>
+							<li><?php esc_html_e( 'Site title, tagline, homepage, posts page, sticky posts, site icon, logo', 'livepull' ); ?></li>
 						</ul>
 					</div>
-					<div><strong>Only with <em>Copy everything from live</em></strong>
+					<div><strong><?php esc_html_e( 'Only with', 'livepull' ); ?> <em><?php esc_html_e( 'Copy everything from live', 'livepull' ); ?></em></strong>
 						<ul class="livepull-bullets">
-							<li>Theme, Customizer and Divi theme options</li>
-							<li>Divi Theme Builder &amp; Library, Elementor templates</li>
-							<li>Widgets, forms and other plugin settings</li>
-							<li>Users</li>
+							<li><?php esc_html_e( 'Theme, Customizer and Divi theme options', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Divi Theme Builder & Library, Elementor templates', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Widgets, forms and other plugin settings', 'livepull' ); ?></li>
+							<li><?php esc_html_e( 'Users', 'livepull' ); ?></li>
 						</ul>
-						<strong>Never</strong>
-						<ul class="livepull-bullets"><li>WooCommerce orders and customers' sessions</li><li>Theme and plugin files (keep those in Git)</li></ul>
+						<strong><?php esc_html_e( 'Never', 'livepull' ); ?></strong>
+						<ul class="livepull-bullets"><li><?php esc_html_e( 'WooCommerce orders and customers\' sessions', 'livepull' ); ?></li><li><?php esc_html_e( 'Theme and plugin files (keep those in Git)', 'livepull' ); ?></li></ul>
 					</div>
 				</div>
 			</details>
 
 			<details class="livepull-advanced">
-				<summary>More options</summary>
+				<summary><?php esc_html_e( 'More options', 'livepull' ); ?></summary>
 				<p>
-					<label><input type="checkbox" id="livepull-all"> <strong>Pull all content from live</strong> (first sync)</label><br>
-					<span class="description">Compares every post, page, media item and category on live, not just changes recorded since LivePull was installed. Your local edits are still kept as conflicts.</span>
+					<label><input type="checkbox" id="livepull-all"> <strong><?php esc_html_e( 'Pull all content from live', 'livepull' ); ?></strong> <?php esc_html_e( '(first sync)', 'livepull' ); ?></label><br>
+					<span class="description"><?php esc_html_e( 'Compares every post, page, media item and category on live, not just changes recorded since LivePull was installed. Your local edits are still kept as conflicts.', 'livepull' ); ?></span>
 				</p>
 				<p>
-					<label><strong>Or catch up from a date</strong><br>
+					<label><strong><?php esc_html_e( 'Or catch up from a date', 'livepull' ); ?></strong><br>
 					<input type="date" id="livepull-since"></label><br>
-					<span class="description">Pulls everything changed on live since that date, e.g. the day you made your local copy.</span>
+					<span class="description"><?php esc_html_e( 'Pulls everything changed on live since that date, e.g. the day you made your local copy.', 'livepull' ); ?></span>
 				</p>
 				<p>
-					<label><input type="checkbox" id="livepull-theirs"> Let live win all conflicts</label><br>
-					<span class="description">Overwrites your local edits wherever live also changed the same item.</span>
+					<label><input type="checkbox" id="livepull-theirs"> <?php esc_html_e( 'Let live win all conflicts', 'livepull' ); ?></label><br>
+					<span class="description"><?php esc_html_e( 'Overwrites your local edits wherever live also changed the same item.', 'livepull' ); ?></span>
 				</p>
 				<p>
-					<label><input type="checkbox" id="livepull-redownload"> Re-download media files that already exist</label>
+					<label><input type="checkbox" id="livepull-redownload"> <?php esc_html_e( 'Re-download media files that already exist', 'livepull' ); ?></label>
 				</p>
 			</details>
 
@@ -300,18 +301,18 @@ final class LivePull_Admin {
 
 		<div class="livepull-card">
 			<details id="livepull-full-card">
-				<summary><h2>Copy everything from live</h2></summary>
-				<p>Replaces this site's <strong>whole database</strong> with a copy of live: posts, pages, menus, settings, Divi Theme Builder and Library, widgets, users and plugin data. Live URLs are switched to <code><?php echo esc_html( home_url() ); ?></code>. Use it to start fresh, or when this copy has drifted too far from live.</p>
+				<summary><h2><?php esc_html_e( 'Copy everything from live', 'livepull' ); ?></h2></summary>
+				<p><?php esc_html_e( 'Replaces this site\'s', 'livepull' ); ?> <strong><?php esc_html_e( 'whole database', 'livepull' ); ?></strong> <?php esc_html_e( 'with a copy of live: posts, pages, menus, settings, Divi Theme Builder and Library, widgets, users and plugin data. Live URLs are switched to', 'livepull' ); ?> <code><?php echo esc_html( home_url() ); ?></code><?php esc_html_e( '. Use it to start fresh, or when this copy has drifted too far from live.', 'livepull' ); ?></p>
 				<ul class="livepull-bullets">
-					<li>Your current database is backed up first (restore it any time under <em>Undo a pull or copy</em>).</li>
-					<li>Nothing here changes until the very end, so you can cancel safely while it runs.</li>
-					<li>Kept as they are here: this site's address, its LivePull connection and "Discourage search engines".</li>
-					<li>Theme and plugin <em>files</em> aren't copied – keep those in Git.</li>
-					<li>Afterwards, log in with your <strong>live site's</strong> username and password.</li>
+					<li><?php esc_html_e( 'Your current database is backed up first (restore it any time under', 'livepull' ); ?> <em><?php esc_html_e( 'Undo a pull or copy', 'livepull' ); ?></em>).</li>
+					<li><?php esc_html_e( 'Nothing here changes until the very end, so you can cancel safely while it runs.', 'livepull' ); ?></li>
+					<li><?php esc_html_e( 'Kept as they are here: this site\'s address, its LivePull connection and "Discourage search engines".', 'livepull' ); ?></li>
+					<li><?php esc_html_e( 'Theme and plugin', 'livepull' ); ?> <em><?php esc_html_e( 'files', 'livepull' ); ?></em> <?php esc_html_e( 'aren\'t copied – keep those in Git.', 'livepull' ); ?></li>
+					<li><?php esc_html_e( 'Afterwards, log in with your', 'livepull' ); ?> <strong><?php esc_html_e( 'live site\'s', 'livepull' ); ?></strong> <?php esc_html_e( 'username and password.', 'livepull' ); ?></li>
 				</ul>
-				<p><label><input type="checkbox" id="livepull-full-files" checked> Also copy the uploads folder (images and other files; only missing or changed files are downloaded)</label></p>
-				<p><button type="button" class="button" id="livepull-full-start">Copy everything from live…</button>
-				<button type="button" class="button-link livepull-danger" id="livepull-full-cancel" hidden>Cancel</button></p>
+				<p><label><input type="checkbox" id="livepull-full-files" checked> <?php esc_html_e( 'Also copy the uploads folder (images and other files; only missing or changed files are downloaded)', 'livepull' ); ?></label></p>
+				<p><button type="button" class="button" id="livepull-full-start"><?php esc_html_e( 'Copy everything from live…', 'livepull' ); ?></button>
+				<button type="button" class="button-link livepull-danger" id="livepull-full-cancel" hidden><?php esc_html_e( 'Cancel', 'livepull' ); ?></button></p>
 				<div id="livepull-full-progress" class="livepull-progress" hidden>
 					<div class="livepull-bar"><span></span></div>
 					<p class="livepull-progress-text"></p>
@@ -321,25 +322,25 @@ final class LivePull_Admin {
 		</div>
 
 		<div class="livepull-card">
-			<h2>Conflicts <span class="count" id="livepull-conflict-count">(<?php echo (int) count( $conflicts ); ?>)</span></h2>
-			<p class="description">Items changed on live <em>and</em> here since they were last pulled. They were left as they are here until you choose.</p>
+			<h2><?php esc_html_e( 'Conflicts', 'livepull' ); ?> <span class="count" id="livepull-conflict-count">(<?php echo (int) count( $conflicts ); ?>)</span></h2>
+			<p class="description"><?php esc_html_e( 'Items changed on live', 'livepull' ); ?> <em><?php esc_html_e( 'and', 'livepull' ); ?></em> <?php esc_html_e( 'here since they were last pulled. They were left as they are here until you choose.', 'livepull' ); ?></p>
 			<div id="livepull-conflicts"><?php self::conflicts_table( $conflicts ); ?></div>
 		</div>
 
 		<?php $backups = LivePull_Backup::all(); ?>
 		<div class="livepull-card">
 			<details id="livepull-backups" <?php echo isset( $_GET['restored'] ) ? 'open' : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- only opens a panel after a redirect. ?>>
-				<summary><h2>Undo a pull or copy</h2></summary>
-				<p class="description">A backup is taken before every pull and every full copy. Restoring one puts this site's posts, pages, media library, categories, users and settings back exactly as they were at that moment (media files that were downloaded stay in the uploads folder).</p>
+				<summary><h2><?php esc_html_e( 'Undo a pull or copy', 'livepull' ); ?></h2></summary>
+				<p class="description"><?php esc_html_e( 'A backup is taken before every pull and every full copy. Restoring one puts this site\'s posts, pages, media library, categories and settings back exactly as they were at that moment (and its users too, for a backup taken before a full copy). Media files that were downloaded stay in the uploads folder.', 'livepull' ); ?></p>
 				<?php if ( ! $backups ) : ?>
-					<p class="livepull-empty">No backups yet.</p>
+					<p class="livepull-empty"><?php esc_html_e( 'No backups yet.', 'livepull' ); ?></p>
 				<?php else : ?>
-				<table class="widefat striped livepull-table"><thead><tr><th>Backup taken</th><th>Size</th><th></th></tr></thead><tbody>
+				<table class="widefat striped livepull-table"><thead><tr><th><?php esc_html_e( 'Backup taken', 'livepull' ); ?></th><th><?php esc_html_e( 'Size', 'livepull' ); ?></th><th></th></tr></thead><tbody>
 				<?php foreach ( array_slice( $backups, 0, 10 ) as $b ) : ?>
 					<tr>
-						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> ago, before a <?php echo 'copy' === $b['kind'] ? 'full copy' : 'pull'; ?>)</span></td>
+						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> <?php esc_html_e( 'ago, before a', 'livepull' ); ?> <?php echo esc_html( 'copy' === $b['kind'] ? __( 'full copy', 'livepull' ) : __( 'pull', 'livepull' ) ); ?>)</span></td>
 						<td><?php echo esc_html( size_format( $b['size'] ) ); ?></td>
-						<td class="livepull-row-actions"><button type="button" class="button livepull-restore" data-file="<?php echo esc_attr( $b['name'] ); ?>">Restore</button></td>
+						<td class="livepull-row-actions"><button type="button" class="button livepull-restore" data-file="<?php echo esc_attr( $b['name'] ); ?>"><?php esc_html_e( 'Restore', 'livepull' ); ?></button></td>
 					</tr>
 				<?php endforeach; ?>
 				</tbody></table>
@@ -349,27 +350,30 @@ final class LivePull_Admin {
 
 		<div class="livepull-card">
 			<details id="livepull-local-details">
-				<summary><h2>Your local changes</h2></summary>
-				<p class="description">Everything edited on this site since it was last pulled. If live changes any of these, you'll get a conflict instead of an overwrite.</p>
+				<summary><h2><?php esc_html_e( 'Your local changes', 'livepull' ); ?></h2></summary>
+				<p class="description"><?php esc_html_e( 'Everything edited on this site since it was last pulled. If live changes any of these, you\'ll get a conflict instead of an overwrite.', 'livepull' ); ?></p>
 				<div id="livepull-local"><p><span class="spinner is-active"></span></p></div>
 			</details>
 		</div>
 
 		<div class="livepull-card">
 			<details id="livepull-connection">
-				<summary><h2>Connection</h2></summary>
+				<summary><h2><?php esc_html_e( 'Connection', 'livepull' ); ?></h2></summary>
 				<?php self::connect_form(); ?>
 				<?php if ( ! defined( 'LIVEPULL_REMOTE' ) ) : ?>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('Disconnect from the live site?');">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm(<?php echo esc_attr( wp_json_encode( __( 'Disconnect from the live site?', 'livepull' ) ) ); ?>);">
 					<?php wp_nonce_field( 'livepull_save' ); ?>
 					<input type="hidden" name="action" value="livepull_save">
 					<input type="hidden" name="do" value="disconnect">
-					<button class="button-link livepull-danger">Disconnect</button>
+					<button class="button-link livepull-danger"><?php esc_html_e( 'Disconnect', 'livepull' ); ?></button>
 				</form>
 				<?php endif; ?>
 				<?php $latest = LivePull_Backup::latest(); ?>
-				<p class="description">Backups are saved before every pull in <code>wp-content/livepull-backups/</code><?php echo $latest ? ' (latest: <code>' . esc_html( basename( $latest ) ) . '</code>)' : ''; ?>. Restore with <code>wp db import</code> or phpMyAdmin.</p>
-				<p class="description">Terminal: <code>wp livepull status</code>, <code>wp livepull pull --dry-run</code>, <code>wp livepull pull</code>.</p>
+				<p class="description"><?php esc_html_e( 'Backups are saved before every pull in', 'livepull' ); ?> <code><?php echo esc_html( LivePull_Backup::dir() ); ?></code><?php echo $latest ? ' (latest: <code>' . esc_html( basename( $latest ) ) . '</code>)' : ''; ?><?php esc_html_e( '. Restore with', 'livepull' ); ?> <code><?php esc_html_e( 'wp db import', 'livepull' ); ?></code> <?php esc_html_e( 'or phpMyAdmin.', 'livepull' ); ?></p>
+				<?php if ( LivePull_Backup::in_web_root() ) : ?>
+					<p class="description"><strong><?php esc_html_e( 'Backups are inside the website\'s own folder', 'livepull' ); ?></strong> <?php esc_html_e( 'because the folder above it can\'t be written to. They have unguessable names and are blocked on Apache and LiteSpeed, but nginx ignores those rules. To keep them completely out of reach, add', 'livepull' ); ?> <code><?php esc_html_e( 'define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/outside/the/website\' );', 'livepull' ); ?></code> <?php esc_html_e( 'to wp-config.php.', 'livepull' ); ?></p>
+				<?php endif; ?>
+				<p class="description"><?php esc_html_e( 'Terminal:', 'livepull' ); ?> <code><?php esc_html_e( 'wp livepull status', 'livepull' ); ?></code>, <code><?php esc_html_e( 'wp livepull pull --dry-run', 'livepull' ); ?></code>, <code><?php esc_html_e( 'wp livepull pull', 'livepull' ); ?></code>.</p>
 			</details>
 		</div>
 		<?php
@@ -404,27 +408,27 @@ final class LivePull_Admin {
 		$count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE source = 'local'", LivePull_Config::table() ) );
 		?>
 		<div class="livepull-card">
-			<?php if ( $collapsed ) : ?><details><summary><h2>Let other sites pull from this one</h2></summary><?php else : ?>
-			<h2>Is this the live site?</h2>
-			<p>Nothing else to set up here. Copy the connection code into <strong>Tools → LivePull</strong> on your local site.</p>
+			<?php if ( $collapsed ) : ?><details><summary><h2><?php esc_html_e( 'Let other sites pull from this one', 'livepull' ); ?></h2></summary><?php else : ?>
+			<h2><?php esc_html_e( 'Is this the live site?', 'livepull' ); ?></h2>
+			<p><?php esc_html_e( 'Nothing else to set up here. Copy the connection code into', 'livepull' ); ?> <strong><?php esc_html_e( 'Tools → LivePull', 'livepull' ); ?></strong> <?php esc_html_e( 'on your local site.', 'livepull' ); ?></p>
 			<?php endif; ?>
 
 			<?php if ( strlen( $secret ) >= 32 ) : ?>
-			<p><label><strong>Connection code</strong></label><br>
-				<span class="livepull-copy"><input type="password" readonly class="large-text code" value="<?php echo esc_attr( self::make_code() ); ?>"><button type="button" class="button livepull-reveal">Show</button><button type="button" class="button button-primary livepull-copy-btn">Copy</button></span>
-				<br><span class="description">Contains this site's address and key. Treat it like a password.</span></p>
-			<details class="livepull-sub"><summary>Or copy the address and key separately</summary>
+			<p><label><strong><?php esc_html_e( 'Connection code', 'livepull' ); ?></strong></label><br>
+				<span class="livepull-copy"><input type="password" readonly class="large-text code" value="<?php echo esc_attr( self::make_code() ); ?>"><button type="button" class="button livepull-reveal"><?php esc_html_e( 'Show', 'livepull' ); ?></button><button type="button" class="button button-primary livepull-copy-btn"><?php esc_html_e( 'Copy', 'livepull' ); ?></button></span>
+				<br><span class="description"><?php esc_html_e( 'Contains this site\'s address and key. Treat it like a password.', 'livepull' ); ?></span></p>
+			<details class="livepull-sub"><summary><?php esc_html_e( 'Or copy the address and key separately', 'livepull' ); ?></summary>
 			<?php endif; ?>
 
-			<p><label><strong>Site URL</strong></label><br>
-				<span class="livepull-copy"><input type="text" readonly class="regular-text code" value="<?php echo esc_attr( home_url() ); ?>"><button type="button" class="button livepull-copy-btn">Copy</button></span></p>
+			<p><label><strong><?php esc_html_e( 'Site URL', 'livepull' ); ?></strong></label><br>
+				<span class="livepull-copy"><input type="text" readonly class="regular-text code" value="<?php echo esc_attr( home_url() ); ?>"><button type="button" class="button livepull-copy-btn"><?php esc_html_e( 'Copy', 'livepull' ); ?></button></span></p>
 
-			<p><label><strong>LivePull key</strong></label><br>
+			<p><label><strong><?php esc_html_e( 'LivePull key', 'livepull' ); ?></strong></label><br>
 			<?php if ( strlen( $secret ) >= 32 ) : ?>
-				<span class="livepull-copy"><input type="password" readonly class="regular-text code livepull-secret" value="<?php echo esc_attr( $secret ); ?>"><button type="button" class="button livepull-reveal">Show</button><button type="button" class="button livepull-copy-btn">Copy</button></span>
-				<br><span class="description">Ends in <code><?php echo esc_html( LivePull_Config::key_hint( $secret ) ); ?></code><?php echo $const ? ' · set in wp-config.php (LIVEPULL_SECRET)' : ''; ?>.</span>
+				<span class="livepull-copy"><input type="password" readonly class="regular-text code livepull-secret" value="<?php echo esc_attr( $secret ); ?>"><button type="button" class="button livepull-reveal"><?php esc_html_e( 'Show', 'livepull' ); ?></button><button type="button" class="button livepull-copy-btn"><?php esc_html_e( 'Copy', 'livepull' ); ?></button></span>
+				<br><span class="description"><?php esc_html_e( 'Ends in', 'livepull' ); ?> <code><?php echo esc_html( LivePull_Config::key_hint( $secret ) ); ?></code><?php echo $const ? ' · set in wp-config.php (LIVEPULL_SECRET)' : ''; ?>.</span>
 			<?php else : ?>
-				<span class="description">No key yet.</span>
+				<span class="description"><?php esc_html_e( 'No key yet.', 'livepull' ); ?></span>
 			<?php endif; ?>
 			</p>
 			<?php if ( strlen( $secret ) >= 32 ) : ?></details><?php endif; ?>
@@ -434,34 +438,34 @@ final class LivePull_Admin {
 				<?php wp_nonce_field( 'livepull_save' ); ?>
 				<input type="hidden" name="action" value="livepull_save">
 				<input type="hidden" name="do" value="generate">
-				<button class="button <?php echo strlen( $secret ) >= 32 ? '' : 'button-primary'; ?>"><?php echo strlen( $secret ) >= 32 ? 'Generate a new key' : 'Generate key'; ?></button>
+				<button class="button <?php echo strlen( $secret ) >= 32 ? '' : 'button-primary'; ?>"><?php echo esc_html( strlen( $secret ) >= 32 ? __( 'Generate a new key', 'livepull' ) : __( 'Generate key', 'livepull' ) ); ?></button>
 			</form>
 			<?php endif; ?>
 
 			<?php $perm = LivePull_Full::permission(); ?>
 			<div class="livepull-inline-form">
-				<strong>Copy everything from this site:</strong>
+				<strong><?php esc_html_e( 'Copy everything from this site:', 'livepull' ); ?></strong>
 				<?php if ( 'always' === $perm ) : ?>
-					<span class="livepull-pill is-on">Allowed</span>
+					<span class="livepull-pill is-on"><?php esc_html_e( 'Allowed', 'livepull' ); ?></span>
 				<?php elseif ( 'off' === $perm ) : ?>
-					<span class="livepull-pill">Off</span>
+					<span class="livepull-pill"><?php esc_html_e( 'Off', 'livepull' ); ?></span>
 				<?php else : ?>
-					<span class="livepull-pill is-on">Allowed for <?php echo esc_html( human_time_diff( time(), time() + (int) $perm ) ); ?></span>
+					<span class="livepull-pill is-on"><?php esc_html_e( 'Allowed for', 'livepull' ); ?> <?php echo esc_html( human_time_diff( time(), time() + (int) $perm ) ); ?></span>
 				<?php endif; ?>
-				<br><span class="description">Lets a site with the key download this site's whole database (including users and plugin settings) and uploads. Normal pulls don't need this.</span>
+				<br><span class="description"><?php esc_html_e( 'Lets a site with the key download this site\'s whole database (including users and plugin settings) and uploads. Normal pulls don\'t need this.', 'livepull' ); ?></span>
 				<?php if ( ! defined( 'LIVEPULL_ALLOW_FULL_COPY' ) ) : ?>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="livepull-perm-buttons">
 					<?php wp_nonce_field( 'livepull_save' ); ?>
 					<input type="hidden" name="action" value="livepull_save">
 					<input type="hidden" name="do" value="fullcopy">
-					<button class="button <?php echo 'off' === $perm ? 'button-primary' : ''; ?>" name="allow" value="hour">Allow for 1 hour</button>
-					<button class="button" name="allow" value="always">Always allow</button>
-					<?php if ( 'off' !== $perm ) : ?><button class="button-link livepull-danger" name="allow" value="off">Switch off</button><?php endif; ?>
+					<button class="button <?php echo 'off' === $perm ? 'button-primary' : ''; ?>" name="allow" value="hour"><?php esc_html_e( 'Allow for 1 hour', 'livepull' ); ?></button>
+					<button class="button" name="allow" value="always"><?php esc_html_e( 'Always allow', 'livepull' ); ?></button>
+					<?php if ( 'off' !== $perm ) : ?><button class="button-link livepull-danger" name="allow" value="off"><?php esc_html_e( 'Switch off', 'livepull' ); ?></button><?php endif; ?>
 				</form>
 				<?php endif; ?>
 			</div>
 			<?php self::recent_changes(); ?>
-			<p class="description">Changes recorded on this site: <?php echo (int) $count; ?>. Pulling never writes anything to this site; the key only allows reading content.</p>
+			<p class="description"><?php esc_html_e( 'Changes recorded on this site:', 'livepull' ); ?> <?php echo (int) $count; ?><?php esc_html_e( '. Pulling never writes anything to this site; the key only allows reading content.', 'livepull' ); ?></p>
 			<?php if ( $collapsed ) : ?></details><?php endif; ?>
 		</div>
 		<?php
@@ -480,7 +484,7 @@ final class LivePull_Admin {
 		foreach ( $rows as $r ) {
 			if ( 'option' === $r->object_type ) {
 				$n    = LivePull_Importer::option_name( $r->sync_id );
-				$item = 0 === strpos( $n, 'theme_mods_' ) ? 'Setting: menu locations / logo' : 'Setting: ' . $n;
+				$item = 0 === strpos( $n, 'theme_mods_' ) ? __( 'Setting: menu locations / logo', 'livepull' ) : sprintf( /* translators: %s: option name */ __( 'Setting: %s', 'livepull' ), $n );
 			} elseif ( 'term' === $r->object_type ) {
 				$t    = get_term( (int) $r->object_id );
 				$item = ( $t && ! is_wp_error( $t ) ) ? $t->taxonomy . ' "' . $t->name . '"' : 'term #' . $r->object_id;
@@ -500,7 +504,7 @@ final class LivePull_Admin {
 	/** Every AJAX handler calls check_ajax_referer() first, then this capability check. */
 	private static function guard() {
 		if ( ! current_user_can( self::CAP ) ) {
-			wp_send_json_error( array( 'message' => 'Not allowed.' ), 403 );
+			wp_send_json_error( array( 'message' => __( 'Not allowed.', 'livepull' ) ), 403 );
 		}
 	}
 
@@ -548,7 +552,7 @@ final class LivePull_Admin {
 		} else {
 			$state = get_transient( $tkey );
 			if ( ! $state ) {
-				wp_send_json_error( array( 'message' => 'This pull session expired. Start it again; progress so far is saved.' ) );
+				wp_send_json_error( array( 'message' => __( 'This pull session expired. Start it again; progress so far is saved.', 'livepull' ) ) );
 			}
 		}
 
@@ -596,7 +600,7 @@ final class LivePull_Admin {
 		self::guard();
 		delete_transient( 'livepull_run_' . get_current_user_id() );
 		LivePull_Puller::cancel();
-		wp_send_json_success( array( 'message' => 'Stopped. Everything up to the last finished batch is kept; pull again to continue.' ) );
+		wp_send_json_success( array( 'message' => __( 'Stopped. Everything up to the last finished batch is kept; pull again to continue.', 'livepull' ) ) );
 	}
 
 	public static function ajax_full() {
@@ -607,7 +611,7 @@ final class LivePull_Admin {
 		if ( 'cancel' === $step ) {
 			delete_transient( $tkey );
 			LivePull_Full::request_cancel(); // The running step stops itself and cleans up.
-			wp_send_json_success( array( 'message' => 'Cancelled. Nothing on this site was changed.' ) );
+			wp_send_json_success( array( 'message' => __( 'Cancelled. Nothing on this site was changed.', 'livepull' ) ) );
 		}
 		if ( 'start' === $step ) {
 			delete_transient( $tkey );
@@ -615,7 +619,7 @@ final class LivePull_Admin {
 		} else {
 			$state = get_transient( $tkey );
 			if ( ! $state ) {
-				wp_send_json_error( array( 'message' => 'This copy session expired. Start again (nothing was changed).' ) );
+				wp_send_json_error( array( 'message' => __( 'This copy session expired. Start again (nothing was changed).', 'livepull' ) ) );
 			}
 		}
 		if ( is_wp_error( $state ) ) {
@@ -657,22 +661,22 @@ final class LivePull_Admin {
 		self::guard();
 		$file = LivePull_Backup::find( isset( $_POST['file'] ) ? sanitize_file_name( wp_unslash( $_POST['file'] ) ) : '' );
 		if ( ! $file ) {
-			wp_send_json_error( array( 'message' => 'Backup not found.' ) );
+			wp_send_json_error( array( 'message' => __( 'Backup not found.', 'livepull' ) ) );
 		}
 		if ( get_transient( LivePull_Puller::LOCK ) ) {
-			wp_send_json_error( array( 'message' => 'A pull is running. Cancel it first.' ) );
+			wp_send_json_error( array( 'message' => __( 'A pull is running. Cancel it first.', 'livepull' ) ) );
 		}
 		// Safety net: back up the current state first, so a restore can itself be undone.
-		$now = LivePull_Backup::create();
+		$now = LivePull_Backup::create( 0 === strpos( basename( $file ), 'pre-copy-' ), $file );
 		if ( is_wp_error( $now ) ) {
-			wp_send_json_error( array( 'message' => 'Could not back up the current state first: ' . $now->get_error_message() ) );
+			wp_send_json_error( array( 'message' => sprintf( /* translators: %s: error message */ __( 'Could not back up the current state first: %s', 'livepull' ), $now->get_error_message() ) ) );
 		}
 		$res = LivePull_Backup::restore( $file );
 		if ( is_wp_error( $res ) ) {
 			wp_send_json_error( array( 'message' => $res->get_error_message() ) );
 		}
 		wp_send_json_success( array(
-			'message'  => 'Restored. This site is back to how it was before that pull.',
+			'message'  => __( 'Restored. This site is back to how it was before that pull.', 'livepull' ),
 			'redirect' => self::url( array( 'restored' => 1 ) ),
 		) );
 	}
@@ -684,13 +688,13 @@ final class LivePull_Admin {
 		$mode = isset( $_POST['mode'] ) ? sanitize_key( wp_unslash( $_POST['mode'] ) ) : '';
 		if ( 'keep' === $mode ) {
 			LivePull_Puller::keep( $key );
-			$message = 'Kept your version.';
+			$message = __( 'Kept your version.', 'livepull' );
 		} else {
 			$r = LivePull_Puller::take( $key );
 			if ( is_wp_error( $r ) ) {
 				wp_send_json_error( array( 'message' => $r->get_error_message() ) );
 			}
-			$message = $r['errors'] ? 'Updated with warnings: ' . implode( '; ', $r['errors'] ) : 'Replaced with the live version.';
+			$message = $r['errors'] ? __( 'Updated with warnings: ', 'livepull' ) . implode( '; ', $r['errors'] ) : __( 'Replaced with the live version.', 'livepull' );
 		}
 		wp_send_json_success( array( 'message' => $message, 'conflict_count' => count( LivePull_Puller::conflicts() ) ) );
 	}

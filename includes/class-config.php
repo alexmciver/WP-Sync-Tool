@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.0.0';
+	const VERSION  = '1.1.0';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */
@@ -161,6 +161,26 @@ final class LivePull_Config {
 	}
 
 	/** @return true|array|null how an option is pulled (whole / sub-keys), or null if it isn't. */
+	/**
+	 * Settings that are never pulled, whatever the configuration or filters say: they control
+	 * the site's address, who can log in, which code runs, or LivePull's own connection.
+	 */
+	public static function option_forbidden( $name ) {
+		global $wpdb;
+		$name = strtolower( (string) $name );
+		$deny = array( 'siteurl', 'home', 'active_plugins', 'active_sitewide_plugins', 'recently_activated', 'users_can_register',
+			'default_role', 'admin_email', 'new_admin_email', 'template', 'stylesheet', 'cron', 'upload_path', 'upload_url_path',
+			'uninstall_plugins', 'auto_update_plugins', 'auto_update_themes', 'secret_key', 'nonce_key', 'nonce_salt', 'auth_key', 'auth_salt',
+			'logged_in_key', 'logged_in_salt', 'secure_auth_key', 'secure_auth_salt', 'db_version', 'initial_db_version',
+			strtolower( $wpdb->prefix . 'user_roles' ) );
+		return in_array( $name, $deny, true ) || 0 === strpos( $name, 'livepull_' ) || 0 === strpos( $name, '_transient' ) || 0 === strpos( $name, '_site_transient' );
+	}
+
+	/** May a pull write this setting? Only the configured pulled settings, never forbidden ones. */
+	public static function option_allowed( $name ) {
+		return ! self::option_forbidden( $name ) && null !== self::option_spec( $name );
+	}
+
 	public static function option_spec( $name ) {
 		foreach ( self::pulled_options() as $pattern => $spec ) {
 			if ( $pattern === $name || ( false !== strpos( $pattern, '*' ) && fnmatch( $pattern, $name ) ) ) {

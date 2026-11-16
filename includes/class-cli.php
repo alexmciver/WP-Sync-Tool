@@ -291,14 +291,14 @@ class LivePull_CLI {
 	public function restore( $args, $assoc ) {
 		$all = LivePull_Backup::all();
 		if ( ! $all ) {
-			WP_CLI::error( 'No backups found in wp-content/livepull-backups/.' );
+			WP_CLI::error( 'No backups found in ' . LivePull_Backup::dir() . '.' );
 		}
 		$file = isset( $args[0] ) ? LivePull_Backup::find( $args[0] ) : $all[0]['file'];
 		if ( ! $file ) {
 			WP_CLI::error( 'Backup not found. Run `wp livepull backups` to list them.' );
 		}
 		WP_CLI::confirm( 'Restore ' . basename( $file ) . '? Everything pulled or edited since then will be undone.', $assoc );
-		$now = LivePull_Backup::create();
+		$now = LivePull_Backup::create( 0 === strpos( basename( $file ), 'pre-copy-' ), $file );
 		if ( ! is_wp_error( $now ) ) {
 			WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
 		}

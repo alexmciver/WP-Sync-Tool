@@ -34,6 +34,7 @@ final class LivePull_Updater {
 		add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject' ) );
 		add_filter( 'plugins_api', array( __CLASS__, 'info' ), 20, 3 );
 		add_filter( 'upgrader_source_selection', array( __CLASS__, 'fix_folder' ), 10, 4 );
+		add_filter( 'upgrader_pre_download', array( __CLASS__, 'verify_download' ), 10, 4 );
 		add_action( 'livepull_admin_title_actions', array( __CLASS__, 'title_action' ) );
 		add_action( 'livepull_admin_notices', array( __CLASS__, 'admin_notices' ) );
 		add_filter( 'auto_update_plugin', array( __CLASS__, 'auto_update' ), 10, 2 );
@@ -213,6 +214,38 @@ final class LivePull_Updater {
 		$host = strtolower( (string) wp_parse_url( (string) $url, PHP_URL_HOST ) );
 		return 'https' === wp_parse_url( (string) $url, PHP_URL_SCHEME )
 			&& in_array( $host, array( 'github.com', 'api.github.com', 'codeload.github.com', 'objects.githubusercontent.com' ), true );
+	}
+
+	/**
+	 * Download a LivePull update ourselves and check it against the SHA-256 checksum published
+	 * with the release. A download that doesn't match (corrupted, or swapped on the way) is
+	 * refused, and so is a release without a checksum.
+	 *
+	 * @return mixed false to let WordPress download other packages; a file path or WP_Error for ours.
+	 */
+	public static function verify_download( $reply, $package, $upgrader = null, $hook_extra = array() ) {
+		if ( false !== $reply || empty( $hook_extra['plugin'] ) || self::basename() !== $hook_extra['plugin'] ) {
+			return $reply;
+		}
+		if ( ! self::trusted_package( $package ) ) {
+			return new WP_Error( 'livepull_untrusted', 'LivePull updates are only installed from GitHub over HTTPS.' );
+		}
+		$sum = wp_remote_get( $package . '.sha256', array( 'timeout' => 20, 'redirection' => 5, 'headers' => array( 'User-Agent' => 'LivePull-Updater' ) ) );
+		if ( is_wp_error( $sum ) || 200 !== (int) wp_remote_retrieve_response_code( $sum ) || ! preg_match( '/^([a-f0-9]{64})\b/i', trim( wp_remote_retrieve_body( $sum ) ), $m ) ) {
+			return new WP_Error( 'livepull_checksum', 'Could not get the checksum for this LivePull release, so the update was not installed. Try again later, or download livepull.zip from GitHub and upload it.' );
+		}
+		if ( ! function_exists( 'download_url' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+		}
+		$file = download_url( $package, 300 );
+		if ( is_wp_error( $file ) ) {
+			return $file;
+		}
+		if ( ! hash_equals( strtolower( $m[1] ), (string) hash_file( 'sha256', $file ) ) ) {
+			wp_delete_file( $file );
+			return new WP_Error( 'livepull_checksum', 'The downloaded LivePull update didn\'t match its published checksum, so it was not installed.' );
+		}
+		return $file;
 	}
 
 	/** Newer release info if one exists, else null. */

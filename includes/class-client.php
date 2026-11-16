@@ -41,7 +41,7 @@ final class LivePull_Client {
 	public function get( $route, array $params = array() ) {
 		$last_error = null;
 		foreach ( $this->urls( $route, $params ) as $style => $url ) {
-			$res = wp_remote_get( $url, array( 'headers' => $this->headers(), 'timeout' => 60, 'sslverify' => self::sslverify(), 'redirection' => 3 ) );
+			$res = $this->fetch( $url, array( 'headers' => $this->headers(), 'timeout' => 60, 'sslverify' => self::sslverify() ), 'api' );
 			if ( is_wp_error( $res ) ) {
 				// Network-level failure: the other URL style won't help.
 				return new WP_Error( $res->get_error_code(), $res->get_error_message() . ' (' . $this->base . ')' );
@@ -111,7 +111,7 @@ final class LivePull_Client {
 		}
 		wp_mkdir_p( dirname( $dest ) );
 		$tmp = $dest . '.livepull-part';
-		$res = wp_remote_get( $url, array( 'timeout' => 60, 'redirection' => 3, 'stream' => true, 'filename' => $tmp, 'headers' => $this->download_headers( $url ), 'sslverify' => self::sslverify() ) );
+		$res = $this->fetch( $url, array( 'timeout' => 60, 'stream' => true, 'filename' => $tmp, 'sslverify' => self::sslverify() ), 'download' );
 		if ( is_wp_error( $res ) ) {
 			@unlink( $tmp ); // phpcs:ignore
 			return $res;
@@ -122,6 +122,59 @@ final class LivePull_Client {
 			return new WP_Error( 'livepull_download', 'HTTP ' . $code . ' for ' . $url );
 		}
 		return LivePull_Config::fs()->move( $tmp, $dest, true ) ? true : new WP_Error( 'livepull_download', 'Could not write ' . $dest );
+	}
+
+	/**
+	 * GET with redirects followed one hop at a time, so every hop is checked:
+	 * - 'api': only to the live site itself (http→https and www/non-www allowed), so the
+	 *   key is never sent anywhere else.
+	 * - 'download': every hop must pass url_allowed(); login details only go to the live host.
+	 *
+	 * @return array|WP_Error
+	 */
+	private function fetch( $url, array $args, $purpose ) {
+		$args['redirection'] = 0;
+		$api_headers         = isset( $args['headers'] ) ? $args['headers'] : array();
+		for ( $hop = 0; $hop <= 5; $hop++ ) {
+			if ( 'api' === $purpose ) {
+				if ( ! $this->same_site( $url ) ) {
+					return new WP_Error( 'livepull_redirect', sprintf( 'The live site redirected to a different address (%s). LivePull only sends its key to the live site, so it stopped. Check the live site\'s address in the connection settings.', (string) wp_parse_url( $url, PHP_URL_HOST ) ) );
+				}
+				$args['headers'] = $api_headers;
+			} else {
+				if ( ! $this->url_allowed( $url ) ) {
+					return new WP_Error( 'livepull_url', 'Refused to download from ' . wp_parse_url( $url, PHP_URL_HOST ) . ' (not the live site or a public address).' );
+				}
+				$args['headers'] = $this->download_headers( $url );
+			}
+			$res = wp_remote_get( $url, $args );
+			if ( is_wp_error( $res ) ) {
+				return $res;
+			}
+			$code     = (int) wp_remote_retrieve_response_code( $res );
+			$location = wp_remote_retrieve_header( $res, 'location' );
+			if ( $code < 300 || $code > 399 || ! $location ) {
+				return $res;
+			}
+			if ( is_array( $location ) ) {
+				$location = end( $location );
+			}
+			$url = WP_Http::make_absolute_url( $location, $url );
+		}
+		return new WP_Error( 'livepull_redirect', 'Too many redirects from ' . wp_parse_url( $url, PHP_URL_HOST ) . '.' );
+	}
+
+	/** Same site as live: same host, ignoring a leading "www.", over http or https. */
+	private function same_site( $url ) {
+		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+		$strip  = function ( $h ) {
+			$h = strtolower( (string) $h );
+			return 0 === strpos( $h, 'www.' ) ? substr( $h, 4 ) : $h;
+		};
+		$a = $strip( wp_parse_url( $url, PHP_URL_HOST ) );
+		return in_array( $scheme, array( 'http', 'https' ), true ) && '' !== $a
+			&& $a === $strip( wp_parse_url( $this->base, PHP_URL_HOST ) )
+			&& wp_parse_url( $url, PHP_URL_PORT ) === wp_parse_url( $this->base, PHP_URL_PORT );
 	}
 
 	private static function sslverify() {

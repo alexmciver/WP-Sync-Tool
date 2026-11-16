@@ -318,6 +318,7 @@ final class LivePull_Full {
 		set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		self::clear_cancel();
 		self::drop_temp_tables();
+		self::remove_stages();
 
 		// Settings that belong to THIS site and must survive the copy.
 		$keep = array();
@@ -349,6 +350,10 @@ final class LivePull_Full {
 			'files_done'   => 0,
 			'files_got'    => 0,
 			'queue'        => array(),
+			// Downloaded files wait here until the database has switched over, so cancelling
+			// or a failure leaves this site's uploads untouched too.
+			'stage'        => self::stage_dir(),
+			'staged'       => 0,
 			'rows_total'   => array_sum( wp_list_pluck( $tables, 'rows' ) ),
 			'rows_done'    => 0,
 			'errors'       => array(),
@@ -402,6 +407,19 @@ final class LivePull_Full {
 		$wpdb->query( "SET SESSION sql_mode = 'NO_AUTO_VALUE_ON_ZERO'" );
 
 		while ( ! $state['done'] ) {
+			if ( 'place' === $state['phase'] ) {
+				// The database has switched over: finish moving the new files into place.
+				$state['activity'] = sprintf( 'Moving %d downloaded files into the uploads folder…', $state['staged'] );
+				// Moves are renames on the same disk, so finish them all now: after the switch
+				// the person may be logged out and no further request would come.
+				if ( self::place_files( $state, '__return_false' ) ) {
+					$state['done']     = true;
+					$state['activity'] = 'Finished';
+					delete_transient( LivePull_Puller::LOCK );
+					break;
+				}
+				continue;
+			}
 			if ( self::cancelled() ) {
 				self::clear_cancel();
 				self::abort();
@@ -459,9 +477,8 @@ final class LivePull_Full {
 					self::abort();
 					return $res;
 				}
-				$state['done']     = true;
-				$state['activity'] = 'Finished';
-				break;
+				$state['phase'] = 'place';
+				continue;
 			}
 			if ( $out() ) {
 				break;
@@ -491,10 +508,61 @@ final class LivePull_Full {
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'livepull_full_cancel' ) );
 	}
 
-	/** Stop: drop temporary tables. This site is unchanged. */
+	/** Stop: drop temporary tables and downloaded files. This site is unchanged. */
 	public static function abort() {
 		self::drop_temp_tables();
+		self::remove_stages();
 		delete_transient( LivePull_Puller::LOCK );
+	}
+
+	/** A new, unguessable staging folder next to uploads (same disk, so moving is instant). */
+	private static function stage_dir() {
+		$uploads = wp_get_upload_dir();
+		return wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-' . wp_generate_password( 20, false );
+	}
+
+	private static function remove_stages() {
+		$uploads = wp_get_upload_dir();
+		foreach ( (array) glob( wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-*', GLOB_ONLYDIR ) as $dir ) {
+			LivePull_Config::fs()->delete( $dir, true );
+		}
+	}
+
+	/** Where a staged copy of an uploads file goes. */
+	private static function staged_path( array $state, $dest ) {
+		$uploads = wp_get_upload_dir();
+		return $state['stage'] . '/' . ltrim( substr( $dest, strlen( wp_normalize_path( $uploads['basedir'] ) ) ), '/' );
+	}
+
+	/**
+	 * Move staged files into uploads. @return bool true when every file is in place.
+	 */
+	private static function place_files( array &$state, callable $out ) {
+		$fs = LivePull_Config::fs();
+		if ( ! is_dir( $state['stage'] ) ) {
+			return true;
+		}
+		$uploads = wp_normalize_path( wp_get_upload_dir()['basedir'] );
+		$it      = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $state['stage'], FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $it as $file ) {
+			if ( $out() ) {
+				return false;
+			}
+			if ( ! $file->isFile() ) {
+				continue;
+			}
+			$rel  = ltrim( substr( wp_normalize_path( $file->getPathname() ), strlen( $state['stage'] ) ), '/' );
+			$dest = LivePull_Importer::safe_dest( $rel );
+			if ( ! $dest || 0 !== strpos( $dest, $uploads . '/' ) ) {
+				continue;
+			}
+			wp_mkdir_p( dirname( $dest ) );
+			if ( ! $fs->move( $file->getPathname(), $dest, true ) && count( $state['errors'] ) < 50 ) {
+				$state['errors'][] = 'Could not move ' . $rel . ' into the uploads folder.';
+			}
+		}
+		$fs->delete( $state['stage'], true );
+		return true;
 	}
 
 	private static function tmp_name( $name ) {
@@ -631,13 +699,14 @@ final class LivePull_Full {
 				if ( file_exists( $dest ) && filesize( $dest ) === (int) $f['size'] ) {
 					continue; // Already here.
 				}
-				$res = $client->download( $f['url'], $dest );
+				$res = $client->download( $f['url'], self::staged_path( $state, $dest ) );
 				if ( is_wp_error( $res ) ) {
 					if ( count( $state['errors'] ) < 50 ) {
 						$state['errors'][] = 'Could not download ' . $f['path'] . ': ' . $res->get_error_message();
 					}
 				} else {
 					$state['files_got']++;
+					$state['staged']++;
 				}
 				continue;
 			}

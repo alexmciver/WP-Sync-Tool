@@ -38,3 +38,7 @@ build wordpress-org livepull-wordpress-org.zip
 mkdir -p "$DIST/bridge/wp-sync" && cp "$ROOT/bin/bridge/wp-sync.php" "$DIST/bridge/wp-sync/"
 (cd "$DIST/bridge" && zip -qr "$DIST/wp-sync.zip" wp-sync) && rm -rf "$DIST/bridge"
 echo "Built dist/wp-sync.zip"
+
+# Checksums: the GitHub download's updater refuses an update that doesn't match.
+(cd "$DIST" && for z in *.zip; do sha256sum "$z" > "$z.sha256"; done)
+echo "Wrote checksums"
