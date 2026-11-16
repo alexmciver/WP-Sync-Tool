@@ -56,6 +56,8 @@ WP Sync records changes on live from the moment it's installed there.
 
 ## What is and isn't pulled
 
+**Matching existing content:** if a live item isn't linked to anything here yet, WP Sync looks for the same thing on this site (same post type + slug, same media file, same category slug) and links them instead of creating a duplicate. If you've edited that local item since, it's reported as a conflict instead of being overwritten.
+
 **Pulled (client-owned content):** posts, pages, custom post types, media + files (all sizes), Woo products and variations, categories/tags/custom taxonomies, all post and term meta, ACF field values. Image and post IDs are re-pointed to the matching local items in featured images, galleries, ACF image/relationship/taxonomy fields, Gutenberg blocks, `[gallery]`, Divi galleries, Woo galleries/upsells and Elementor data. Live URLs are rewritten to your local URL.
 
 **Never pulled (developer-owned structure, deploy via Git or your usual process):** menus, theme and plugin settings, ACF field groups, Divi/Elementor templates and Theme Builder, form definitions, Woo orders, users (authors are matched by username, falling back to the first admin).
@@ -64,7 +66,11 @@ WP Sync records changes on live from the moment it's installed there.
 
 **Safety during a pull:** no emails, pingbacks or Woo webhooks are sent from the local site; a database backup is made first (kept in `wp-content/wpsync-backups/`, last 10); only one pull runs at a time.
 
-## Restoring a backup
+## Undo a pull
+
+**Tools → WP Sync → Undo a pull** lists the backups taken before each pull (last 10), each with a **Restore** button. Restoring first backs up the current state, so a restore can be undone too. Terminal: `wp sync backups` and `wp sync restore [<file>]`.
+
+## Restoring a backup by hand
 
 ```
 wp db import wp-content/wpsync-backups/pre-pull-YYYYMMDD-HHMMSS.sql

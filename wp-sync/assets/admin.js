@@ -313,6 +313,25 @@
 		} );
 	} );
 
+	/* --------------------------------------------------------------- Restore */
+
+	document.addEventListener( 'click', function ( e ) {
+		var b = e.target.closest( '.wpsync-restore' );
+		if ( ! b ) { return; }
+		var when = b.closest( 'tr' ).querySelector( 'td' ).textContent.trim();
+		if ( ! window.confirm( 'Restore the backup from ' + when + '?\n\nEverything pulled or edited on this site since then will be undone. (Your current state is backed up first, so you can undo this too.)' ) ) { return; }
+		$$( '.wpsync-restore' ).forEach( function ( x ) { x.disabled = true; } );
+		b.textContent = 'Restoring…';
+		post( 'wpsync_restore', { file: b.getAttribute( 'data-file' ) }, 600000 ).then( function ( d ) {
+			window.onbeforeunload = null;
+			window.location.href = d.redirect;
+		} ).catch( function ( err ) {
+			$$( '.wpsync-restore' ).forEach( function ( x ) { x.disabled = false; } );
+			b.textContent = 'Restore';
+			window.alert( err.message );
+		} );
+	} );
+
 	/* --------------------------------------------------------- Local changes */
 
 	var localLoaded = false;

@@ -222,6 +222,49 @@ class WPSync_CLI {
 	}
 
 	/**
+	 * Undo a pull: restore a backup taken before it.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<file>]
+	 * : Backup file name (see `wp sync backups`). Defaults to the most recent.
+	 *
+	 * [--yes]
+	 * : Don't ask for confirmation.
+	 */
+	public function restore( $args, $assoc ) {
+		$all = WPSync_Backup::all();
+		if ( ! $all ) {
+			WP_CLI::error( 'No backups found in wp-content/wpsync-backups/.' );
+		}
+		$file = isset( $args[0] ) ? WPSync_Backup::find( $args[0] ) : $all[0]['file'];
+		if ( ! $file ) {
+			WP_CLI::error( 'Backup not found. Run `wp sync backups` to list them.' );
+		}
+		WP_CLI::confirm( 'Restore ' . basename( $file ) . '? Everything pulled or edited since then will be undone.', $assoc );
+		$now = WPSync_Backup::create();
+		if ( ! is_wp_error( $now ) ) {
+			WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
+		}
+		$res = WPSync_Backup::restore( $file );
+		if ( is_wp_error( $res ) ) {
+			WP_CLI::error( $res->get_error_message() );
+		}
+		WP_CLI::success( 'Restored ' . basename( $file ) . '.' );
+	}
+
+	/**
+	 * List backups taken before pulls.
+	 */
+	public function backups( $args, $assoc ) {
+		$rows = array();
+		foreach ( WPSync_Backup::all() as $b ) {
+			$rows[] = array( 'file' => $b['name'], 'taken' => wp_date( 'Y-m-d H:i:s', $b['time'] ), 'size' => size_format( $b['size'] ) );
+		}
+		$rows ? \WP_CLI\Utils\format_items( 'table', $rows, array( 'file', 'taken', 'size' ) ) : WP_CLI::log( 'No backups yet.' );
+	}
+
+	/**
 	 * Show this site's key, for connecting a local copy to it.
 	 *
 	 * @subcommand key

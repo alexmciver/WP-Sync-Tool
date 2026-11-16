@@ -115,6 +115,86 @@ final class WPSync_Backup {
 		}
 	}
 
+	/** Backups, newest first. @return array[] { file, name, time, size } */
+	public static function all() {
+		$out = array();
+		foreach ( (array) glob( self::dir() . '/pre-pull-*' ) as $f ) {
+			if ( ! preg_match( '/^pre-pull-(\d{8})-(\d{6})\.sql(\.gz)?$/', basename( $f ), $m ) ) {
+				continue;
+			}
+			$out[] = array(
+				'file' => $f,
+				'name' => basename( $f ),
+				'time' => strtotime( $m[1] . 'T' . $m[2] . 'Z' ),
+				'size' => (int) filesize( $f ),
+			);
+		}
+		usort( $out, function ( $a, $b ) {
+			return $b['time'] - $a['time'];
+		} );
+		return $out;
+	}
+
+	/** Resolve a backup file name safely (no paths). @return string|null */
+	public static function find( $name ) {
+		$name = basename( (string) $name );
+		if ( ! preg_match( '/^pre-pull-\d{8}-\d{6}\.sql(\.gz)?$/', $name ) ) {
+			return null;
+		}
+		$file = self::dir() . '/' . $name;
+		return file_exists( $file ) ? $file : null;
+	}
+
+	/**
+	 * Put the database back to how it was in a backup (undo a pull).
+	 * Reads statement by statement, so large backups don't need much memory.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function restore( $file ) {
+		global $wpdb;
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 600 ); // phpcs:ignore
+		}
+		$gz = '.gz' === substr( $file, -3 );
+		$fh = $gz ? gzopen( $file, 'rb' ) : fopen( $file, 'rb' ); // phpcs:ignore
+		if ( ! $fh ) {
+			return new WP_Error( 'wpsync_restore', 'Could not open ' . basename( $file ) );
+		}
+		$run = function ( $sql ) use ( $wpdb ) {
+			if ( $wpdb->dbh instanceof mysqli ) {
+				return mysqli_query( $wpdb->dbh, $sql ) ? true : mysqli_error( $wpdb->dbh );
+			}
+			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore
+		};
+		$run( 'SET FOREIGN_KEY_CHECKS=0' );
+		$buf = '';
+		while ( true ) {
+			$line = $gz ? gzgets( $fh ) : fgets( $fh );
+			if ( false === $line ) {
+				break;
+			}
+			if ( '' === $buf && ( '' === trim( $line ) || 0 === strpos( $line, '--' ) ) ) {
+				continue;
+			}
+			$buf .= $line;
+			if ( ';' === substr( rtrim( $line ), -1 ) ) {
+				$ok = $run( $buf );
+				if ( true !== $ok ) {
+					$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
+					return new WP_Error( 'wpsync_restore', 'Restore stopped with a database error: ' . $ok . '. The database may be partly restored; try again, or import the file with your usual tool.' );
+				}
+				$buf = '';
+			}
+		}
+		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
+		$run( 'SET FOREIGN_KEY_CHECKS=1' );
+		wp_cache_flush();
+		// Backups are taken at the start of a pull, so they contain that pull's lock.
+		delete_transient( 'wpsync_lock' );
+		return true;
+	}
+
 	public static function latest() {
 		$files = glob( self::dir() . '/pre-pull-*' );
 		if ( ! $files ) {
