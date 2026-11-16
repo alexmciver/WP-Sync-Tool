@@ -87,8 +87,10 @@ final class WPSync_Exporter {
 	}
 
 	private function strip_meta( array $meta ) {
-		foreach ( WPSync_Config::ignored_meta_keys() as $k ) {
-			unset( $meta[ $k ] );
+		foreach ( array_keys( $meta ) as $k ) {
+			if ( WPSync_Config::is_ignored_meta( $k ) ) {
+				unset( $meta[ $k ] );
+			}
 		}
 		return $meta;
 	}
@@ -136,8 +138,13 @@ final class WPSync_Exporter {
 		$this->collect_content_refs( $post->post_content, 'post_content' );
 		$this->collect_content_refs( $post->post_excerpt, 'post_excerpt' );
 		foreach ( WPSync_Refs::content_meta_keys() as $ck ) {
-			if ( isset( $meta[ $ck ][0] ) ) {
-				$this->collect_content_refs( $meta[ $ck ][0], $ck );
+			if ( isset( $meta[ $ck ] ) ) {
+				foreach ( (array) $meta[ $ck ] as $raw ) {
+					$self = $this;
+					WPSync_Refs::walk_value( WPSync_Payload::unserialize( $raw ), function ( $kind, $id ) use ( $self ) {
+						return $self->remember_public( $kind, $id );
+					}, $ck );
+				}
 			}
 		}
 		if ( $post->post_parent ) {
@@ -241,7 +248,21 @@ final class WPSync_Exporter {
 		$meta     = $this->strip_meta( (array) get_term_meta( $term->term_id ) );
 		$ref_keys = WPSync_Refs::meta_ref_keys( $meta, 'term', $term->term_id );
 		$this->collect_meta_refs( $meta, $ref_keys );
-		$this->collect_content_refs( $term->description, 'term_description' );
+		$desc_kind = WPSync_Refs::description_kind( $term->taxonomy );
+		if ( $desc_kind ) {
+			foreach ( WPSync_Refs::ids_in_value( WPSync_Payload::unserialize( $term->description ) ) as $rid ) {
+				$this->remember( $desc_kind, $rid );
+			}
+		} else {
+			$this->collect_content_refs( $term->description, 'term_description' );
+		}
+		$wc_attr = null;
+		if ( 0 === strpos( $term->taxonomy, 'pa_' ) && function_exists( 'wc_attribute_taxonomy_id_by_name' ) ) {
+			$a = wc_get_attribute( wc_attribute_taxonomy_id_by_name( $term->taxonomy ) );
+			if ( $a ) {
+				$wc_attr = array( 'name' => $a->name, 'slug' => substr( $a->slug, 3 ), 'type' => $a->type, 'order_by' => $a->order_by, 'has_archives' => (bool) $a->has_archives );
+			}
+		}
 		if ( $term->parent ) {
 			$this->remember( 'term', $term->parent );
 		}
@@ -258,6 +279,7 @@ final class WPSync_Exporter {
 			),
 			'meta'      => $meta,
 			'ref_keys'  => $ref_keys,
+			'wc_attribute' => $wc_attr,
 			'idmap'     => $this->idmap,
 		);
 	}
@@ -276,7 +298,8 @@ final class WPSync_Payload {
 		if ( ! is_string( $raw ) || ! is_serialized( $raw ) ) {
 			return $raw;
 		}
-		$value = @unserialize( trim( $raw ), array( 'allowed_classes' => false ) ); // phpcs:ignore
+		// Plain stdClass objects are safe (no methods); anything else stays an inert placeholder.
+		$value = @unserialize( trim( $raw ), array( 'allowed_classes' => array( 'stdClass' ) ) ); // phpcs:ignore
 		return ( false === $value && 'b:0;' !== trim( $raw ) ) ? $raw : $value;
 	}
 }

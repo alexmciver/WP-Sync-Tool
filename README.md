@@ -146,7 +146,28 @@ add_filter( 'wpsync_meta_ref_keys', function ( $keys, $meta, $type ) {
 }, 10, 3 );
 ```
 
-Other filters: `wpsync_walk_content` (custom shortcodes), `wpsync_content_meta_keys` (builder data), `wpsync_block_id_attributes`, `wpsync_excluded_post_types`, `wpsync_excluded_taxonomies`, `wpsync_ignored_meta_keys`, `wpsync_pulled_options`, `wpsync_option_refs`, `wpsync_backup_tables`, `wpsync_full_copy_skip_tables`, `wpsync_full_copy_skip_dirs`. Action: `wpsync_after_pull`.
+Other filters: `wpsync_ignored_meta_patterns` (plugin cache fields that shouldn't count as edits), `wpsync_walk_content` (custom shortcodes), `wpsync_content_meta_keys` (builder data), `wpsync_block_id_attributes`, `wpsync_excluded_post_types`, `wpsync_excluded_taxonomies`, `wpsync_ignored_meta_keys`, `wpsync_pulled_options`, `wpsync_option_refs`, `wpsync_backup_tables`, `wpsync_full_copy_skip_tables`, `wpsync_full_copy_skip_dirs`. Actions: `wpsync_after_pull`, `wpsync_imported_post`, `wpsync_imported_term`.
+
+## Tested with
+
+Every release is checked by an end-to-end test suite that builds a real live site and a local site (with different IDs and table prefixes), pulls content across, edits it on live, pulls again and runs *Copy everything*. It currently covers:
+
+| Area | Tested with |
+|---|---|
+| Editors / page builders | Gutenberg core blocks, Elementor, Beaver Builder, SiteOrigin Page Builder, Spectra, Kadence Blocks, GenerateBlocks, Divi 4 and Divi 5 content* |
+| Shop | WooCommerce simple and variable products, galleries, upsells, attributes |
+| Fields / SEO / languages | ACF (image, relationship, taxonomy fields), Yoast SEO, Polylang |
+| Site structure | Menus, menu locations, homepage and posts page, site title, logo, icon |
+| Safety | Conflicts (edited on both sides), deletions, undo, *Copy everything* |
+
+\* Divi is a paid theme, so the suite checks Divi's saved content arrives intact and re-pointed but doesn't render it. Bricks, Oxygen, WPBakery and Brizy data is handled the same way but not yet covered by tests.
+
+To run it yourself (needs PHP, MySQL/MariaDB and WP-CLI; put plugin zips in a folder):
+
+```bash
+WPSYNC_TEST_PLUGINS=~/plugin-zips DB_USER=root DB_PASS=secret tests/run.sh
+tests/run.sh elementor woocommerce   # just some scenarios
+```
 
 ## Limitations
 

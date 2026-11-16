@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.5.1';
+	const VERSION  = '0.6.0';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -197,6 +197,40 @@ final class WPSync_Config {
 			$names = array_merge( $names, (array) $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like ) ) );
 		}
 		return array_values( array_unique( $names ) );
+	}
+
+	/**
+	 * Is this meta key one WP Sync should ignore? Exact keys plus caches that page builders
+	 * and plugins rewrite whenever a page is viewed (they're per-site and rebuilt
+	 * automatically, and treating them as edits would cause false conflicts).
+	 */
+	public static function is_ignored_meta( $key ) {
+		static $exact = null;
+		if ( null === $exact || has_filter( 'wpsync_ignored_meta_keys' ) ) {
+			$exact = array_flip( self::ignored_meta_keys() );
+		}
+		$key = (string) $key;
+		if ( isset( $exact[ $key ] ) ) {
+			return true;
+		}
+		$patterns = apply_filters( 'wpsync_ignored_meta_patterns', array(
+			'/^_oembed_/',                                     // WordPress oEmbed cache
+			'/^_elementor_(css|page_assets|element_cache|screenshot|controls_usage|migrations_state)/', // Elementor caches
+			'/^_uag_(page_assets|css_file_name|js_file_name)/', '/^_uagb_previous_block_counts$/', // Spectra
+			'/^_kad_post_(css|assets)/', '/^_kadence_blocks_(css|assets)/', // Kadence
+			'/^_generateblocks_(dynamic_css|css)/', '/^generateblocks_css/', // GenerateBlocks
+			'/^_et_dynamic_cached_/', '/^_et_builder_module_features_cache/', '/^et_enqueued_post_fonts$/', '/^_et_pb_ab_/', // Divi
+			'/^_fl_builder_.*_cache/',                         // Beaver Builder
+			'/^_brizy_.*(cache|compiled)/',                    // Brizy
+			'/^_siteorigin_panels_(css|cache)/',               // SiteOrigin
+			'/^_wpsl_/', '/^_transient_/',
+		) );
+		foreach ( $patterns as $re ) {
+			if ( preg_match( $re, $key ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static function post_type_ok( $type ) {

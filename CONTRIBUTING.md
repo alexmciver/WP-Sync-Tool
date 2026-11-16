@@ -22,3 +22,7 @@ Security problems: please report privately instead – see [SECURITY.md](SECURIT
 ## Releasing (maintainers)
 
 Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/class-config.php` (`VERSION`), add a `CHANGELOG.md` entry, and push to `main`. The GitHub Action builds `wp-sync.zip` and publishes the release; sites see it as an update.
+
+## Tests
+
+Run `tests/run.sh` before opening a pull request (see the README for setup). New page builder or plugin support should come with a scenario in `tests/scenarios/` that creates content on live in the `create` phase and checks it on local in the `verify` phase.
