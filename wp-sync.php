@@ -2,7 +2,8 @@
 /**
  * Plugin Name: WP Sync (change puller)
  * Description: Pull content your client adds or edits on the live site into your local copy without overwriting your own work. Tools → WP Sync, or `wp sync` in the terminal. Install and activate on BOTH live and local (normal plugin or must-use plugin).
- * Version: 0.2.3
+ * Version: 0.3.0
+ * Update URI: https://github.com/alexmciver/WP-Sync-Tool
  * Author: Alex M Web Design
  * Requires PHP: 7.4
  *
@@ -19,12 +20,13 @@ define( 'WPSYNC_FILE', __FILE__ );
 
 $wpsync_dir = __DIR__ . '/wp-sync/includes/';
 
-foreach ( array( 'config', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'puller' ) as $wpsync_file ) {
+foreach ( array( 'config', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'puller', 'updater' ) as $wpsync_file ) {
 	require_once $wpsync_dir . 'class-' . $wpsync_file . '.php';
 }
 
 WPSync_Logger::init();
 WPSync_Rest::init();
+WPSync_Updater::init();
 add_action( 'init', array( 'WPSync_Config', 'maybe_install' ), 1 );
 register_activation_hook( __FILE__, array( 'WPSync_Config', 'install' ) );
 add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), function ( $links ) {
