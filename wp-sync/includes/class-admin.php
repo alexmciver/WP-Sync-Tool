@@ -61,7 +61,7 @@ final class WPSync_Admin {
 			$url = isset( $_POST['remote'] ) ? esc_url_raw( trim( wp_unslash( $_POST['remote'] ) ) ) : '';
 			$key = isset( $_POST['remote_key'] ) ? preg_replace( '/\s+/', '', wp_unslash( $_POST['remote_key'] ) ) : '';
 			update_option( 'wpsync_remote', untrailingslashit( $url ), false );
-			if ( '' !== $key && ! defined( 'WPSYNC_SECRET' ) ) {
+			if ( '' !== $key && ! defined( 'WPSYNC_REMOTE_SECRET' ) ) {
 				update_option( 'wpsync_remote_secret', $key, false );
 			}
 			$msg = 'connected';
@@ -129,7 +129,8 @@ final class WPSync_Admin {
 
 	private static function connect_form() {
 		$remote_const = defined( 'WPSYNC_REMOTE' );
-		$key_const    = defined( 'WPSYNC_SECRET' );
+		$key_const    = defined( 'WPSYNC_REMOTE_SECRET' );
+		list( $cur_key, $cur_from ) = WPSync_Config::remote_secret_source();
 		?>
 		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wpsync-form">
 			<?php wp_nonce_field( 'wpsync_save' ); ?>
@@ -144,11 +145,11 @@ final class WPSync_Admin {
 			<p>
 				<label for="wpsync-key"><strong>Live site's WP Sync key</strong></label><br>
 				<input type="password" id="wpsync-key" name="remote_key" class="regular-text code" autocomplete="off"
-					placeholder="<?php echo esc_attr( WPSync_Config::remote_secret() ? '•••••••• saved (leave blank to keep)' : 'Paste from Tools → WP Sync on the live site' ); ?>" <?php disabled( $key_const ); ?>>
-				<?php if ( $key_const ) : ?><br><span class="description">Set in wp-config.php (WPSYNC_SECRET).</span><?php endif; ?>
+					placeholder="<?php echo esc_attr( $cur_key ? 'Paste a new key to replace it' : 'Paste from Tools → WP Sync on the live site' ); ?>" <?php disabled( $key_const ); ?>>
+				<?php if ( $cur_key ) : ?><br><span class="description">Currently using the key ending <code><?php echo esc_html( WPSync_Config::key_hint( $cur_key ) ); ?></code> (<?php echo esc_html( $cur_from ); ?>).</span><?php endif; ?>
 			</p>
 			<?php if ( ! $remote_const || ! $key_const ) : ?>
-				<p><button class="button button-primary">Save and connect</button></p>
+				<p><button class="button button-primary"><?php echo WPSync_Config::remote() ? 'Save' : 'Save and connect'; ?></button></p>
 			<?php endif; ?>
 		</form>
 		<?php
@@ -211,7 +212,7 @@ final class WPSync_Admin {
 		</div>
 
 		<div class="wpsync-card">
-			<details>
+			<details id="wpsync-connection">
 				<summary><h2>Connection</h2></summary>
 				<?php self::connect_form(); ?>
 				<?php if ( ! defined( 'WPSYNC_REMOTE' ) ) : ?>
@@ -270,7 +271,7 @@ final class WPSync_Admin {
 			<p><label><strong>WP Sync key</strong></label><br>
 			<?php if ( strlen( $secret ) >= 32 ) : ?>
 				<span class="wpsync-copy"><input type="password" readonly class="regular-text code wpsync-secret" value="<?php echo esc_attr( $secret ); ?>"><button type="button" class="button wpsync-reveal">Show</button><button type="button" class="button wpsync-copy-btn">Copy</button></span>
-				<?php if ( $const ) : ?><br><span class="description">Set in wp-config.php (WPSYNC_SECRET).</span><?php endif; ?>
+				<br><span class="description">Ends in <code><?php echo esc_html( WPSync_Config::key_hint( $secret ) ); ?></code><?php echo $const ? ' · set in wp-config.php (WPSYNC_SECRET)' : ''; ?>.</span>
 			<?php else : ?>
 				<span class="description">No key yet.</span>
 			<?php endif; ?>

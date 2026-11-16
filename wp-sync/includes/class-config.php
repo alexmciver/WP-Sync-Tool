@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.2.1';
+	const VERSION  = '0.2.2';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -27,13 +27,33 @@ final class WPSync_Config {
 		return untrailingslashit( trim( $url ) );
 	}
 
+	/**
+	 * Key used when pulling from live. A key pasted on Tools → WP Sync wins, so an old
+	 * WPSYNC_SECRET line in wp-config.php can't silently override it.
+	 */
 	public static function remote_secret() {
-		// Key used when pulling. Same as this site's key unless a separate one was saved.
-		if ( defined( 'WPSYNC_SECRET' ) ) {
-			return (string) WPSYNC_SECRET;
+		return self::remote_secret_source()[0];
+	}
+
+	/** @return array{0:string,1:string} [ key, where it came from ] */
+	public static function remote_secret_source() {
+		if ( defined( 'WPSYNC_REMOTE_SECRET' ) ) {
+			return array( (string) WPSYNC_REMOTE_SECRET, 'WPSYNC_REMOTE_SECRET in wp-config.php' );
 		}
-		$k = (string) get_option( 'wpsync_remote_secret', '' );
-		return '' !== $k ? $k : (string) get_option( 'wpsync_secret', '' );
+		$pasted = trim( (string) get_option( 'wpsync_remote_secret', '' ) );
+		if ( '' !== $pasted ) {
+			return array( $pasted, 'the key pasted on Tools → WP Sync' );
+		}
+		if ( defined( 'WPSYNC_SECRET' ) ) {
+			return array( (string) WPSYNC_SECRET, 'WPSYNC_SECRET in wp-config.php' );
+		}
+		return array( (string) get_option( 'wpsync_secret', '' ), "this site's own key" );
+	}
+
+	/** "…a1b2" so keys can be compared on screen without showing them. */
+	public static function key_hint( $key ) {
+		$key = (string) $key;
+		return strlen( $key ) >= 8 ? '…' . substr( $key, -4 ) : '(none)';
 	}
 
 	public static function page_size() {
