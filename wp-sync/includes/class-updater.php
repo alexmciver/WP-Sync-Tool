@@ -48,35 +48,79 @@ final class WPSync_Updater {
 		if ( ! $force && is_array( $cached ) ) {
 			return $cached ? $cached : null;
 		}
+		$errors = array();
+		$data   = self::from_api( $errors );
+		if ( ! $data ) {
+			$data = self::from_redirect( $errors ); // Fallback: no API, no rate limit.
+		}
+		update_option( 'wpsync_update_error', $data ? '' : implode( ' / ', $errors ), false );
+		// Cache failures briefly too, so a GitHub outage doesn't slow every admin page.
+		set_site_transient( self::CACHE, $data ? $data : array(), $data ? self::CACHE_TTL : 15 * MINUTE_IN_SECONDS );
+		return $data;
+	}
+
+	/** Why the last check failed ('' if it worked). */
+	public static function last_error() {
+		return (string) get_option( 'wpsync_update_error', '' );
+	}
+
+	private static function from_api( array &$errors ) {
 		$res = wp_remote_get(
 			'https://api.github.com/repos/' . self::REPO . '/releases/latest',
 			array(
-				'timeout' => 10,
+				'timeout' => 15,
 				'headers' => array( 'Accept' => 'application/vnd.github+json', 'User-Agent' => 'WP-Sync-Updater' ),
 			)
 		);
-		$data = null;
-		if ( ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res ) ) {
-			$json = json_decode( wp_remote_retrieve_body( $res ), true );
-			if ( is_array( $json ) && ! empty( $json['tag_name'] ) && empty( $json['draft'] ) && empty( $json['prerelease'] ) ) {
-				$package = '';
-				foreach ( (array) ( isset( $json['assets'] ) ? $json['assets'] : array() ) as $asset ) {
-					if ( isset( $asset['name'], $asset['browser_download_url'] ) && 'wp-sync.zip' === $asset['name'] ) {
-						$package = $asset['browser_download_url'];
-					}
-				}
-				$data = array(
-					'version'   => ltrim( $json['tag_name'], 'vV' ),
-					'package'   => $package ? $package : ( isset( $json['zipball_url'] ) ? $json['zipball_url'] : '' ),
-					'url'       => isset( $json['html_url'] ) ? $json['html_url'] : 'https://github.com/' . self::REPO,
-					'notes'     => isset( $json['body'] ) ? (string) $json['body'] : '',
-					'published' => isset( $json['published_at'] ) ? $json['published_at'] : '',
-				);
+		if ( is_wp_error( $res ) ) {
+			$errors[] = 'GitHub API: ' . $res->get_error_message();
+			return null;
+		}
+		$code = (int) wp_remote_retrieve_response_code( $res );
+		$json = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( 200 !== $code || ! is_array( $json ) || empty( $json['tag_name'] ) ) {
+			$errors[] = 'GitHub API: HTTP ' . $code . ( is_array( $json ) && ! empty( $json['message'] ) ? ' ' . $json['message'] : '' );
+			return null;
+		}
+		$package = '';
+		foreach ( (array) ( isset( $json['assets'] ) ? $json['assets'] : array() ) as $asset ) {
+			if ( isset( $asset['name'], $asset['browser_download_url'] ) && 'wp-sync.zip' === $asset['name'] ) {
+				$package = $asset['browser_download_url'];
 			}
 		}
-		// Cache failures briefly too, so a GitHub outage doesn't slow every admin page.
-		set_site_transient( self::CACHE, $data ? $data : array(), $data ? self::CACHE_TTL : HOUR_IN_SECONDS );
-		return $data;
+		if ( ! $package ) {
+			$errors[] = 'GitHub API: latest release has no wp-sync.zip';
+			return null;
+		}
+		return array(
+			'version'   => ltrim( $json['tag_name'], 'vV' ),
+			'package'   => $package,
+			'url'       => isset( $json['html_url'] ) ? $json['html_url'] : 'https://github.com/' . self::REPO . '/releases',
+			'notes'     => isset( $json['body'] ) ? (string) $json['body'] : '',
+			'published' => isset( $json['published_at'] ) ? $json['published_at'] : '',
+		);
+	}
+
+	/** github.com/<repo>/releases/latest redirects to …/releases/tag/vX.Y.Z. */
+	private static function from_redirect( array &$errors ) {
+		$res = wp_remote_head( 'https://github.com/' . self::REPO . '/releases/latest', array( 'timeout' => 15, 'redirection' => 0, 'headers' => array( 'User-Agent' => 'WP-Sync-Updater' ) ) );
+		if ( is_wp_error( $res ) ) {
+			$errors[] = 'github.com: ' . $res->get_error_message();
+			return null;
+		}
+		$loc = (string) wp_remote_retrieve_header( $res, 'location' );
+		if ( ! preg_match( '#/releases/tag/(v?[0-9][0-9A-Za-z.\-]*)$#', $loc, $m ) ) {
+			$errors[] = 'github.com: HTTP ' . wp_remote_retrieve_response_code( $res ) . ', no release found';
+			return null;
+		}
+		$tag = $m[1];
+		return array(
+			'version'   => ltrim( $tag, 'vV' ),
+			'package'   => 'https://github.com/' . self::REPO . '/releases/download/' . rawurlencode( $tag ) . '/wp-sync.zip',
+			'url'       => 'https://github.com/' . self::REPO . '/releases/tag/' . rawurlencode( $tag ),
+			'notes'     => '',
+			'published' => '',
+		);
 	}
 
 	private static function item( $r = null ) {

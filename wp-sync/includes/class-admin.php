@@ -85,11 +85,16 @@ final class WPSync_Admin {
 		}
 		$configured = (bool) WPSync_Config::remote();
 		if ( isset( $_GET['wpsync_check'] ) && check_admin_referer( 'wpsync_check' ) ) {
-			WPSync_Updater::check_now();
-			$msg = WPSync_Updater::available() ? '' : 'uptodate';
+			$found = WPSync_Updater::check_now();
+			if ( ! $found ) {
+				$msg = 'checkfailed';
+			} else {
+				$msg = WPSync_Updater::available() ? '' : 'uptodate';
+			}
 		}
 		$msgs       = array(
 			'uptodate'     => 'WP Sync is up to date (version ' . WPSync_Config::VERSION . ').',
+			'checkfailed'  => 'Couldn\'t check GitHub for updates: ' . WPSync_Updater::last_error() . '. You can always download the latest wp-sync.zip from github.com/alexmciver/WP-Sync-Tool/releases and upload it.',
 			'connected'    => 'Connection saved. Checking live…',
 			'disconnected' => 'Disconnected from live.',
 			'key'          => 'New key generated. Copy it into your local site.',
@@ -116,7 +121,7 @@ final class WPSync_Admin {
 				</div>
 			<?php endif; ?>
 			<?php if ( isset( $msgs[ $msg ] ) ) : ?>
-				<div class="notice notice-success is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
+				<div class="notice notice-<?php echo 'checkfailed' === $msg ? 'error' : 'success'; ?> is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( is_multisite() ) : ?>
 				<div class="notice notice-warning"><p>Multisite networks are not supported yet.</p></div>
