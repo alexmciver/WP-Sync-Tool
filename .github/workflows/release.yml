@@ -42,7 +42,7 @@ jobs:
           fi
 
       - name: Build
-        if: steps.exists.outputs.skip != 'true'
+        if: steps.exists.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
         run: bin/build.sh
 
       - name: Publish GitHub release
@@ -57,9 +57,11 @@ jobs:
             --title "LivePull ${{ steps.v.outputs.version }}" \
             --notes-file notes.txt
 
+      # Runs for new versions, and when started by hand (Actions → Release → Run workflow),
+      # e.g. to publish the current version right after WordPress.org approves the plugin.
       - name: Check for WordPress.org credentials
         id: svn
-        if: steps.exists.outputs.skip != 'true'
+        if: steps.exists.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
         env:
           SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
         run: '[ -n "$SVN_USERNAME" ] && echo "ok=true" >> "$GITHUB_OUTPUT" || echo "No SVN credentials yet: skipping WordPress.org."'

@@ -1,6 +1,14 @@
 # Changelog
 
-All notable changes to WP Sync. Versions follow [semantic versioning](https://semver.org/); while in 0.x, minor versions may add features and change behaviour.
+All notable changes to LivePull (called WP Sync before 1.0). Versions follow [semantic versioning](https://semver.org/); while in 0.x, minor versions may add features and change behaviour.
+
+## 1.0.0 – LivePull
+- **New name: LivePull.** WordPress.org doesn't allow "WP" in new plugin names, so WP Sync is now LivePull, ready for the plugin directory. The terminal command is now `wp livepull`.
+- Existing WP Sync installs move over automatically: install LivePull, deactivate WP Sync, and LivePull takes over the connection, change history, links between live and local content, and backups. `WPSYNC_…` settings in wp-config.php keep working. Old `wpsync1:` connection codes are still accepted.
+- Passes WordPress.org's Plugin Check with no errors or warnings: every database query uses placeholders, form input is sanitised, and every action checks its security token.
+- Two downloads: the GitHub one updates itself from GitHub releases; the WordPress.org one is updated by WordPress.org.
+- Tested automatically on every change, on PHP 7.4, 8.0, 8.1, 8.2, 8.3 and 8.4, plus a big-site test (`tests/perf.sh`).
+- Now requires WordPress 6.2 or newer.
 
 ## 0.6.1 – tested with real Divi
 - Tested end to end with Divi 4.27.9 installed: Divi pages, images, galleries, buttons and full-width layouts display correctly on local after a pull; Theme Builder, Divi Library and Theme Options come across with *Copy everything*.
