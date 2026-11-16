@@ -41,13 +41,13 @@ jobs:
       - name: Lint PHP
         if: steps.exists.outputs.skip != 'true'
         run: |
-          for f in wp-sync.php wp-sync/includes/*.php; do php -l "$f"; done
+          for f in wp-sync.php uninstall.php wp-sync/includes/*.php; do php -l "$f"; done
 
       - name: Build wp-sync.zip
         if: steps.exists.outputs.skip != 'true'
         run: |
           mkdir -p build/wp-sync
-          cp -r wp-sync.php wp-sync README.md build/wp-sync/
+          cp -r wp-sync.php wp-sync uninstall.php README.md build/wp-sync/
           cd build && zip -qr wp-sync.zip wp-sync
 
       - name: Publish release

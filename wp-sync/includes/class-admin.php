@@ -58,8 +58,19 @@ final class WPSync_Admin {
 		$msg = 'saved';
 
 		if ( 'connect' === $do && ! defined( 'WPSYNC_REMOTE' ) ) {
-			$url = isset( $_POST['remote'] ) ? esc_url_raw( trim( wp_unslash( $_POST['remote'] ) ) ) : '';
-			$key = isset( $_POST['remote_key'] ) ? preg_replace( '/\s+/', '', wp_unslash( $_POST['remote_key'] ) ) : '';
+			$url  = isset( $_POST['remote'] ) ? esc_url_raw( trim( wp_unslash( $_POST['remote'] ) ) ) : '';
+			$key  = isset( $_POST['remote_key'] ) ? preg_replace( '/\s+/', '', wp_unslash( $_POST['remote_key'] ) ) : '';
+			$code = isset( $_POST['code'] ) ? self::parse_code( wp_unslash( $_POST['code'] ) ) : null;
+			if ( $code ) {
+				list( $url, $key ) = $code;
+			} elseif ( ! empty( $_POST['code'] ) ) {
+				wp_safe_redirect( self::url( array( 'msg' => 'badcode' ) ) );
+				exit;
+			}
+			if ( '' === $url ) {
+				wp_safe_redirect( self::url( array( 'msg' => 'nourl' ) ) );
+				exit;
+			}
 			update_option( 'wpsync_remote', untrailingslashit( $url ), false );
 			if ( '' !== $key && ! defined( 'WPSYNC_REMOTE_SECRET' ) ) {
 				update_option( 'wpsync_remote_secret', $key, false );
@@ -70,7 +81,8 @@ final class WPSync_Admin {
 			delete_option( 'wpsync_remote_secret' );
 			$msg = 'disconnected';
 		} elseif ( 'fullcopy' === $do && ! defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
-			update_option( 'wpsync_allow_full_copy', empty( $_POST['allow'] ) ? 'no' : 'yes', false );
+			$allow = isset( $_POST['allow'] ) ? sanitize_key( wp_unslash( $_POST['allow'] ) ) : 'off';
+			update_option( 'wpsync_allow_full_copy', 'hour' === $allow ? (string) ( time() + HOUR_IN_SECONDS ) : ( 'always' === $allow ? 'always' : 'no' ), false );
 			$msg = 'saved';
 		} elseif ( 'generate' === $do && ! defined( 'WPSYNC_SECRET' ) ) {
 			update_option( 'wpsync_secret', bin2hex( random_bytes( 32 ) ), false );
@@ -78,6 +90,25 @@ final class WPSync_Admin {
 		}
 		wp_safe_redirect( self::url( array( 'msg' => $msg ) ) );
 		exit;
+	}
+
+	/** A connection code carries the live URL and key in one paste: "wpsync1:" + base64(JSON). */
+	public static function make_code() {
+		return 'wpsync1:' . base64_encode( wp_json_encode( array( 'u' => home_url(), 'k' => WPSync_Config::secret() ) ) ); // phpcs:ignore
+	}
+
+	/** @return array{0:string,1:string}|null [ url, key ] */
+	public static function parse_code( $code ) {
+		$code = trim( (string) $code );
+		if ( 0 !== strpos( $code, 'wpsync1:' ) ) {
+			return null;
+		}
+		$data = json_decode( (string) base64_decode( substr( $code, 8 ), true ), true ); // phpcs:ignore
+		if ( ! is_array( $data ) || empty( $data['u'] ) || empty( $data['k'] ) || strlen( $data['k'] ) < 32 ) {
+			return null;
+		}
+		$url = esc_url_raw( $data['u'] );
+		return $url ? array( untrailingslashit( $url ), preg_replace( '/\s+/', '', $data['k'] ) ) : null;
 	}
 
 	/* ============================================================== Render */
@@ -103,6 +134,8 @@ final class WPSync_Admin {
 			'key'          => 'New key generated. Copy it into your local site.',
 			'restored'     => 'Backup restored. You may need to log in again if you were logged out.',
 			'saved'        => 'Saved.',
+			'badcode'      => 'That connection code isn\'t valid. Copy it again from Tools → WP Sync on the live site (use the Copy button).',
+			'nourl'        => 'Paste the connection code from the live site, or fill in its URL and key.',
 		);
 		if ( ! isset( $msg ) ) {
 			$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : ( isset( $_GET['restored'] ) ? 'restored' : '' );
@@ -125,7 +158,21 @@ final class WPSync_Admin {
 				</div>
 			<?php endif; ?>
 			<?php if ( isset( $msgs[ $msg ] ) ) : ?>
-				<div class="notice notice-<?php echo 'checkfailed' === $msg ? 'error' : 'success'; ?> is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
+				<div class="notice notice-<?php echo in_array( $msg, array( 'checkfailed', 'badcode', 'nourl' ), true ) ? 'error' : 'success'; ?> is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
+			<?php endif; ?>
+			<?php
+			if ( ! function_exists( 'get_plugins' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/plugin.php';
+			}
+			$copies = array();
+			foreach ( get_plugins() as $file => $data ) {
+				if ( isset( $data['Name'] ) && 0 === strpos( $data['Name'], 'WP Sync' ) ) {
+					$copies[ $file ] = $data['Version'];
+				}
+			}
+			if ( count( $copies ) > 1 ) :
+				?>
+				<div class="notice notice-warning"><p><strong>WP Sync is installed more than once</strong> (<?php echo esc_html( implode( ', ', array_map( function ( $f, $v ) { return dirname( $f ) . ' v' . $v; }, array_keys( $copies ), $copies ) ) ); ?>). Only the copy in <code><?php echo esc_html( dirname( plugin_basename( WPSYNC_FILE ) ) ); ?></code> is running. Delete the others on the <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>">Plugins</a> screen (deactivate first) so updates go to the right one.</p></div>
 			<?php endif; ?>
 			<?php if ( is_multisite() ) : ?>
 				<div class="notice notice-warning"><p>Multisite networks are not supported yet.</p></div>
@@ -166,10 +213,17 @@ final class WPSync_Admin {
 			<?php wp_nonce_field( 'wpsync_save' ); ?>
 			<input type="hidden" name="action" value="wpsync_save">
 			<input type="hidden" name="do" value="connect">
+			<?php if ( ! $remote_const && ! $key_const ) : ?>
+			<p>
+				<label for="wpsync-code"><strong>Connection code</strong></label><br>
+				<input type="text" id="wpsync-code" name="code" class="large-text code" autocomplete="off" placeholder="wpsync1:… – copy it from Tools → WP Sync on the live site">
+				<br><span class="description">Paste this and you're done. Or fill in the two fields below instead.</span>
+			</p>
+			<?php endif; ?>
 			<p>
 				<label for="wpsync-remote"><strong>Live site URL</strong></label><br>
 				<input type="url" id="wpsync-remote" name="remote" class="regular-text" placeholder="https://www.example.co.uk"
-					value="<?php echo esc_attr( WPSync_Config::remote() ); ?>" <?php disabled( $remote_const ); ?> required>
+					value="<?php echo esc_attr( WPSync_Config::remote() ); ?>" <?php disabled( $remote_const ); ?>>
 				<?php if ( $remote_const ) : ?><br><span class="description">Set in wp-config.php (WPSYNC_REMOTE).</span><?php endif; ?>
 			</p>
 			<p>
@@ -197,6 +251,7 @@ final class WPSync_Admin {
 
 			<p id="wpsync-recording" class="description" hidden></p>
 			<div id="wpsync-status" class="wpsync-status is-loading"><span class="spinner is-active"></span> Checking live site…</div>
+			<p id="wpsync-last-summary" class="description" hidden></p>
 			<div id="wpsync-notices"></div>
 
 			<div class="wpsync-actions">
@@ -204,6 +259,32 @@ final class WPSync_Admin {
 				<button type="button" class="button button-primary button-hero" id="wpsync-pull" disabled>Pull changes</button>
 				<button type="button" class="button-link wpsync-danger" id="wpsync-cancel" hidden>Cancel</button>
 			</div>
+
+			<details class="wpsync-advanced wpsync-what">
+				<summary>What gets pulled?</summary>
+				<div class="wpsync-what-grid">
+					<div><strong>Every pull</strong>
+						<ul class="wpsync-bullets">
+							<li>Posts, pages and custom post types (incl. WooCommerce products)</li>
+							<li>Media library + files</li>
+							<li>Categories, tags and other taxonomies</li>
+							<li>Custom fields (ACF etc.) and page-builder content</li>
+							<li>Menus and menu locations<?php echo WPSync_Config::pull_menus() ? '' : ' <em>(switched off on this site)</em>'; ?></li>
+							<li>Site title, tagline, homepage, posts page, sticky posts, site icon, logo</li>
+						</ul>
+					</div>
+					<div><strong>Only with <em>Copy everything from live</em></strong>
+						<ul class="wpsync-bullets">
+							<li>Theme, Customizer and Divi theme options</li>
+							<li>Divi Theme Builder &amp; Library, Elementor templates</li>
+							<li>Widgets, forms and other plugin settings</li>
+							<li>Users</li>
+						</ul>
+						<strong>Never</strong>
+						<ul class="wpsync-bullets"><li>WooCommerce orders and customers' sessions</li><li>Theme and plugin files (keep those in Git)</li></ul>
+					</div>
+				</div>
+			</details>
 
 			<details class="wpsync-advanced">
 				<summary>More options</summary>
@@ -268,10 +349,10 @@ final class WPSync_Admin {
 				<?php if ( ! $backups ) : ?>
 					<p class="wpsync-empty">No backups yet.</p>
 				<?php else : ?>
-				<table class="widefat striped wpsync-table"><thead><tr><th>Backup taken (before the pull)</th><th>Size</th><th></th></tr></thead><tbody>
+				<table class="widefat striped wpsync-table"><thead><tr><th>Backup taken</th><th>Size</th><th></th></tr></thead><tbody>
 				<?php foreach ( array_slice( $backups, 0, 10 ) as $b ) : ?>
 					<tr>
-						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> ago)</span></td>
+						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> ago, before a <?php echo 'copy' === $b['kind'] ? 'full copy' : 'pull'; ?>)</span></td>
 						<td><?php echo esc_html( size_format( $b['size'] ) ); ?></td>
 						<td class="wpsync-row-actions"><button type="button" class="button wpsync-restore" data-file="<?php echo esc_attr( $b['name'] ); ?>">Restore</button></td>
 					</tr>
@@ -340,7 +421,14 @@ final class WPSync_Admin {
 		<div class="wpsync-card">
 			<?php if ( $collapsed ) : ?><details><summary><h2>Let other sites pull from this one</h2></summary><?php else : ?>
 			<h2>Is this the live site?</h2>
-			<p>Nothing else to set up here. Copy these two values into <strong>Tools → WP Sync</strong> on your local site.</p>
+			<p>Nothing else to set up here. Copy the connection code into <strong>Tools → WP Sync</strong> on your local site.</p>
+			<?php endif; ?>
+
+			<?php if ( strlen( $secret ) >= 32 ) : ?>
+			<p><label><strong>Connection code</strong></label><br>
+				<span class="wpsync-copy"><input type="password" readonly class="large-text code" value="<?php echo esc_attr( self::make_code() ); ?>"><button type="button" class="button wpsync-reveal">Show</button><button type="button" class="button button-primary wpsync-copy-btn">Copy</button></span>
+				<br><span class="description">Contains this site's address and key. Treat it like a password.</span></p>
+			<details class="wpsync-sub"><summary>Or copy the address and key separately</summary>
 			<?php endif; ?>
 
 			<p><label><strong>Site URL</strong></label><br>
@@ -354,6 +442,7 @@ final class WPSync_Admin {
 				<span class="description">No key yet.</span>
 			<?php endif; ?>
 			</p>
+			<?php if ( strlen( $secret ) >= 32 ) : ?></details><?php endif; ?>
 
 			<?php if ( ! $const ) : ?>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" <?php echo strlen( $secret ) >= 32 ? 'onsubmit="return confirm(\'Generate a new key? Local sites using the old key will stop connecting until you paste the new one in.\');"' : ''; ?>>
@@ -364,14 +453,28 @@ final class WPSync_Admin {
 			</form>
 			<?php endif; ?>
 
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wpsync-inline-form">
-				<?php wp_nonce_field( 'wpsync_save' ); ?>
-				<input type="hidden" name="action" value="wpsync_save">
-				<input type="hidden" name="do" value="fullcopy">
-				<label><input type="checkbox" name="allow" value="1" <?php checked( WPSync_Full::allowed() ); ?> <?php disabled( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ); ?> onchange="this.form.submit()">
-				Allow <strong>Copy everything</strong> from this site</label><br>
-				<span class="description">Lets a site with the key download this site's whole database and uploads (including users and settings). Switch off if you only want content pulls.</span>
-			</form>
+			<?php $perm = WPSync_Full::permission(); ?>
+			<div class="wpsync-inline-form">
+				<strong>Copy everything from this site:</strong>
+				<?php if ( 'always' === $perm ) : ?>
+					<span class="wpsync-pill is-on">Allowed</span>
+				<?php elseif ( 'off' === $perm ) : ?>
+					<span class="wpsync-pill">Off</span>
+				<?php else : ?>
+					<span class="wpsync-pill is-on">Allowed for <?php echo esc_html( human_time_diff( time(), time() + (int) $perm ) ); ?></span>
+				<?php endif; ?>
+				<br><span class="description">Lets a site with the key download this site's whole database (including users and plugin settings) and uploads. Normal pulls don't need this.</span>
+				<?php if ( ! defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) : ?>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="wpsync-perm-buttons">
+					<?php wp_nonce_field( 'wpsync_save' ); ?>
+					<input type="hidden" name="action" value="wpsync_save">
+					<input type="hidden" name="do" value="fullcopy">
+					<button class="button <?php echo 'off' === $perm ? 'button-primary' : ''; ?>" name="allow" value="hour">Allow for 1 hour</button>
+					<button class="button" name="allow" value="always">Always allow</button>
+					<?php if ( 'off' !== $perm ) : ?><button class="button-link wpsync-danger" name="allow" value="off">Switch off</button><?php endif; ?>
+				</form>
+				<?php endif; ?>
+			</div>
 			<?php self::recent_changes(); ?>
 			<p class="description">Changes recorded on this site: <?php echo (int) $count; ?>. Pulling never writes anything to this site; the key only allows reading content.</p>
 			<?php if ( $collapsed ) : ?></details><?php endif; ?>
@@ -434,6 +537,7 @@ final class WPSync_Admin {
 			'notices'    => $notices,
 			'recording_since' => ! empty( $remote['recording_since'] ) ? wp_date( 'j M Y, H:i', strtotime( $remote['recording_since'] . ' UTC' ) ) : '',
 			'never_pulled'    => ! get_option( 'wpsync_last_pull' ) || ! get_option( 'wpsync_full_synced' ),
+			'last_summary'    => get_option( 'wpsync_last_summary', null ),
 		) );
 	}
 

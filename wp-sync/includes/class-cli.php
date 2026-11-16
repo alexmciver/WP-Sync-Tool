@@ -31,18 +31,27 @@ class WPSync_CLI {
 	 *
 	 * ## OPTIONS
 	 *
-	 * <url>
-	 * : Live site URL.
+	 * <code-or-url>
+	 * : The connection code from the live site's Tools → WP Sync screen (or its URL).
 	 *
-	 * <key>
-	 * : The key shown on the live site's Tools → WP Sync screen.
+	 * [<key>]
+	 * : The key, if you gave a URL instead of a connection code.
 	 */
 	public function connect( $args, $assoc ) {
 		if ( defined( 'WPSYNC_REMOTE' ) ) {
 			WP_CLI::error( 'WPSYNC_REMOTE is set in wp-config.php; change it there.' );
 		}
-		update_option( 'wpsync_remote', untrailingslashit( esc_url_raw( $args[0] ) ), false );
-		update_option( 'wpsync_remote_secret', trim( $args[1] ), false );
+		require_once __DIR__ . '/class-admin.php';
+		$code = WPSync_Admin::parse_code( $args[0] );
+		if ( $code ) {
+			list( $url, $key ) = $code;
+		} elseif ( isset( $args[1] ) ) {
+			list( $url, $key ) = array( untrailingslashit( esc_url_raw( $args[0] ) ), trim( $args[1] ) );
+		} else {
+			WP_CLI::error( 'Give the connection code from live, or its URL followed by the key.' );
+		}
+		update_option( 'wpsync_remote', $url, false );
+		update_option( 'wpsync_remote_secret', $key, false );
 		$this->status( array(), array() );
 	}
 
@@ -323,7 +332,8 @@ class WPSync_CLI {
 		}
 		WP_CLI::log( 'URL: ' . home_url() );
 		WP_CLI::log( 'Key: ' . $secret );
-		WP_CLI::log( 'On your local site run:  wp sync connect ' . home_url() . ' ' . $secret );
+		require_once __DIR__ . '/class-admin.php';
+		WP_CLI::log( 'On your local site run:  wp sync connect ' . WPSync_Admin::make_code() );
 	}
 
 	/**

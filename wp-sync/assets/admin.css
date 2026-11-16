@@ -56,3 +56,12 @@
 .wpsync-version { font-size: 13px; color: #646970; font-weight: 400; margin-left: 4px; }
 .wpsync-bullets { list-style: disc; margin-left: 20px; }
 .wpsync-inline-form { margin: 12px 0; }
+.wpsync-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #f0f0f1; color: #50575e; font-size: 12px; margin-left: 4px; }
+.wpsync-pill.is-on { background: #edfaef; color: #008a20; }
+.wpsync-perm-buttons { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wpsync-what-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+.wpsync-what-grid ul { margin-top: 4px; }
+.wpsync-sub { margin: 8px 0; }
+.wpsync-sub summary { cursor: pointer; color: #2271b1; }
+.wpsync-sub summary::before { content: none !important; }
+@media (max-width: 782px) { .wpsync-what-grid { grid-template-columns: 1fr; } }

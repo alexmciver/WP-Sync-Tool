@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.4.2';
+	const VERSION  = '0.5.0';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -205,6 +205,25 @@ final class WPSync_Config {
 
 	public static function taxonomy_ok( $tax ) {
 		return $tax && ! in_array( $tax, self::excluded_taxonomies(), true );
+	}
+
+	/** Live sites: tidy the change log daily (local sites keep theirs for conflict checks). */
+	public static function schedule() {
+		$next = wp_next_scheduled( 'wpsync_daily' );
+		if ( '' === self::remote() && ! $next ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'wpsync_daily' );
+		} elseif ( '' !== self::remote() && $next ) {
+			wp_clear_scheduled_hook( 'wpsync_daily' );
+		}
+	}
+
+	public static function daily() {
+		global $wpdb;
+		if ( '' !== self::remote() ) {
+			return;
+		}
+		$days = defined( 'WPSYNC_LOG_DAYS' ) ? max( 7, (int) WPSYNC_LOG_DAYS ) : 180;
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . self::table() . ' WHERE created_at < %s', gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ) ) );
 	}
 
 	public static function maybe_install() {

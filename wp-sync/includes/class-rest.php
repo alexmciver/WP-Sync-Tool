@@ -115,7 +115,7 @@ final class WPSync_Rest {
 	public static function status() {
 		global $wpdb;
 		$uploads = wp_get_upload_dir();
-		WPSync_Ids::backfill();
+		WPSync_Ids::maybe_backfill();
 		return array(
 			'version'        => WPSync_Config::VERSION,
 			'site_key'       => WPSync_Config::site_key(),
@@ -123,6 +123,7 @@ final class WPSync_Rest {
 			'siteurl'        => site_url(),
 			'upload_baseurl' => $uploads['baseurl'],
 			'last_id'        => (int) $wpdb->get_var( 'SELECT MAX(id) FROM ' . WPSync_Config::table() ),
+			'min_id'         => (int) $wpdb->get_var( 'SELECT MIN(id) FROM ' . WPSync_Config::table() ),
 			'recording_since' => (string) get_option( 'wpsync_installed', '' ),
 			'full_copy'       => WPSync_Full::allowed(),
 			'wp_version'      => get_bloginfo( 'version' ),

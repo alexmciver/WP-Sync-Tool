@@ -146,6 +146,9 @@ final class WPSync_Updater {
 		$force = isset( $_GET['force-check'] ); // phpcs:ignore -- Dashboard → Updates → "Check again".
 		$r     = self::release( $force );
 		$base  = self::basename();
+		if ( $r && ! self::trusted_package( $r['package'] ) ) {
+			$r = null;
+		}
 		if ( $r && $r['package'] && version_compare( $r['version'], WPSync_Config::VERSION, '>' ) ) {
 			$transient->response[ $base ] = self::item( $r );
 			unset( $transient->no_update[ $base ] );
@@ -203,13 +206,20 @@ final class WPSync_Updater {
 		return $update;
 	}
 
+	/** Only ever install packages served by GitHub over HTTPS. */
+	public static function trusted_package( $url ) {
+		$host = strtolower( (string) wp_parse_url( (string) $url, PHP_URL_HOST ) );
+		return 'https' === wp_parse_url( (string) $url, PHP_URL_SCHEME )
+			&& in_array( $host, array( 'github.com', 'api.github.com', 'codeload.github.com', 'objects.githubusercontent.com' ), true );
+	}
+
 	/** Newer release info if one exists, else null. */
 	public static function available( $force = false ) {
 		if ( ! has_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject' ) ) ) {
 			return null; // Must-use install or updater disabled.
 		}
 		$r = self::release( $force );
-		return ( $r && $r['package'] && version_compare( $r['version'], WPSync_Config::VERSION, '>' ) ) ? $r : null;
+		return ( $r && $r['package'] && self::trusted_package( $r['package'] ) && version_compare( $r['version'], WPSync_Config::VERSION, '>' ) ) ? $r : null;
 	}
 
 	/** Link that runs WordPress's normal plugin updater for WP Sync. */

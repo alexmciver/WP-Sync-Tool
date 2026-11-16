@@ -16,6 +16,19 @@ final class WPSync_Puller {
 		return new WPSync_Client( WPSync_Config::remote(), WPSync_Config::remote_secret() );
 	}
 
+	/** http:// to a public host (local dev domains and private networks are fine). */
+	public static function insecure_remote() {
+		$url = WPSync_Config::remote();
+		if ( 'http' !== strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) ) {
+			return false;
+		}
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ) || preg_match( '/\.(local|test|localhost|lan|internal|ddev\.site|lndo\.site)$/', $host ) ) {
+			return false;
+		}
+		return ! preg_match( '/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/', $host );
+	}
+
 	public static function empty_report() {
 		return array( 'created' => array(), 'updated' => array(), 'deleted' => array(), 'conflicts' => array(), 'skipped' => array(), 'errors' => array(), 'files' => 0 );
 	}
@@ -46,6 +59,9 @@ final class WPSync_Puller {
 		}
 		if ( strlen( WPSync_Config::remote_secret() ) < 32 ) {
 			return new WP_Error( 'wpsync_no_secret', 'The key must be at least 32 characters and match the one on the live site.' );
+		}
+		if ( self::insecure_remote() ) {
+			$notices[] = 'The live site URL starts with http://, so the WP Sync key and your content travel unencrypted. Use https:// if the live site supports it.';
 		}
 		$remote = self::client()->get( 'status' );
 		if ( is_wp_error( $remote ) ) {
@@ -119,15 +135,20 @@ final class WPSync_Puller {
 			set_transient( self::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		}
 
-		WPSync_Ids::backfill();
+		WPSync_Ids::maybe_backfill();
+		WPSync_Importer::reset_cache();
 
 		// Safety net: our position in live's change list is beyond live's newest change
 		// (live restored from a backup, or a mistaken copy detection). Rather than say
 		// "nothing to pull", check everything changed on live since the last pull.
-		if ( '' === $since && null === $opts['from'] && (int) get_option( 'wpsync_cursor', 0 ) > (int) $remote['last_id'] ) {
+		$cursor_now = (int) get_option( 'wpsync_cursor', 0 );
+		$behind     = $cursor_now > 0 && ! empty( $remote['min_id'] ) && $cursor_now < (int) $remote['min_id'] - 1;
+		if ( '' === $since && null === $opts['from'] && ( $cursor_now > (int) $remote['last_id'] || $behind ) ) {
 			$last  = get_option( 'wpsync_last_pull' );
 			$since = $last ? gmdate( 'Y-m-d', strtotime( $last . ' UTC' ) - DAY_IN_SECONDS ) : '1970-01-01';
-			$notices[] = "This site's place in live's change list was out of step, so this pull checks everything changed on live since {$since} instead.";
+			$notices[] = $behind
+				? "It's been a while since the last pull and live has tidied away its older change history, so this pull checks everything changed on live since {$since}."
+				: "This site's place in live's change list was out of step, so this pull checks everything changed on live since {$since} instead.";
 		}
 
 		return array(
@@ -286,6 +307,15 @@ final class WPSync_Puller {
 				self::save_cursor( (int) $state['remote']['last_id'], $state['remote'] );
 			}
 			update_option( 'wpsync_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
+			$r = $state['report'];
+			update_option( 'wpsync_last_summary', array(
+				'created'   => count( $r['created'] ),
+				'updated'   => count( $r['updated'] ),
+				'deleted'   => count( $r['deleted'] ),
+				'conflicts' => count( $r['conflicts'] ),
+				'files'     => (int) $r['files'],
+				'errors'    => count( $r['errors'] ),
+			), false );
 			if ( 'scan' === $state['mode'] && $state['since'] <= '2000-01-01' ) {
 				update_option( 'wpsync_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
 			}
@@ -366,6 +396,7 @@ final class WPSync_Puller {
 		if ( is_wp_error( $file ) ) {
 			return $file;
 		}
+		WPSync_Importer::reset_cache();
 		$importer = new WPSync_Importer( self::client(), $remote, array( 'force' => array( $key ) ) );
 		$report   = $importer->run( array( $obj ) );
 		self::forget_conflict( $key );
