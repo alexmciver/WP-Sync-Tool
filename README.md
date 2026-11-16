@@ -10,9 +10,9 @@ Nothing is ever written to the live site. Live only answers read-only, key-prote
 
 **As a normal plugin (easiest):** on **live** and **local**, go to **Plugins → Add New → Upload Plugin**, upload `wp-sync.zip`, and click **Activate**. To update later, upload the new zip and choose **Replace current with uploaded**.
 
-**Updates are automatic.** WP Sync checks [GitHub releases](https://github.com/alexmciver/WP-Sync-Tool/releases) and updates itself like any other plugin (WordPress checks twice a day; Dashboard → Updates → Check again forces it). To see updates but install them yourself, add `define( 'WPSYNC_DISABLE_AUTO_UPDATE', true );` to wp-config.php.
+**Updates:** when a new version is released on [GitHub](https://github.com/alexmciver/WP-Sync-Tool/releases), Tools → WP Sync shows **"WP Sync x.y.z is available"** with an **Update now** button (it also appears on the Plugins page and Dashboard → Updates). Use **Check for updates** at the top of the WP Sync screen to look straight away. Update both sites so they stay on the same version. Prefer hands-off? Click **Enable auto-updates** next to WP Sync on the Plugins screen, or add `define( 'WPSYNC_AUTO_UPDATE', true );` to wp-config.php.
 
-**Or as a must-use plugin** (can't be deactivated by accident, but doesn't auto-update): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
+**Or as a must-use plugin** (can't be deactivated by accident, but can't update itself either): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
 
 Keep it active on live at all times: changes made on live while it's deactivated aren't recorded (use catch-up mode to recover).
 

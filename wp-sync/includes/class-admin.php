@@ -84,16 +84,36 @@ final class WPSync_Admin {
 			return;
 		}
 		$configured = (bool) WPSync_Config::remote();
+		if ( isset( $_GET['wpsync_check'] ) && check_admin_referer( 'wpsync_check' ) ) {
+			WPSync_Updater::check_now();
+			$msg = WPSync_Updater::available() ? '' : 'uptodate';
+		}
 		$msgs       = array(
+			'uptodate'     => 'WP Sync is up to date (version ' . WPSync_Config::VERSION . ').',
 			'connected'    => 'Connection saved. Checking live…',
 			'disconnected' => 'Disconnected from live.',
 			'key'          => 'New key generated. Copy it into your local site.',
 		);
-		$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : '';
+		if ( ! isset( $msg ) ) {
+			$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : '';
+		}
+		$update = WPSync_Updater::available();
 		?>
 		<div class="wrap wpsync">
-			<h1>WP Sync</h1>
+			<h1>WP Sync <span class="wpsync-version">v<?php echo esc_html( WPSync_Config::VERSION ); ?></span>
+				<?php if ( has_filter( 'pre_set_site_transient_update_plugins', array( 'WPSync_Updater', 'inject' ) ) ) : ?>
+				<a class="page-title-action" href="<?php echo esc_url( wp_nonce_url( self::url( array( 'wpsync_check' => 1 ) ), 'wpsync_check' ) ); ?>">Check for updates</a>
+				<?php endif; ?>
+			</h1>
 			<p class="wpsync-lead">Pull content your client adds or edits on the live site into this copy, without overwriting your own work.</p>
+			<?php if ( $update ) : ?>
+				<div class="notice notice-info wpsync-update">
+					<p><strong>WP Sync <?php echo esc_html( $update['version'] ); ?> is available</strong> (you have <?php echo esc_html( WPSync_Config::VERSION ); ?>).
+					<a href="<?php echo esc_url( $update['url'] ); ?>" target="_blank" rel="noopener">What's new</a></p>
+					<p><a class="button button-primary" href="<?php echo esc_url( WPSync_Updater::update_url() ); ?>">Update now</a>
+					<span class="description">&nbsp;Update both your live and local sites so they stay on the same version.</span></p>
+				</div>
+			<?php endif; ?>
 			<?php if ( isset( $msgs[ $msg ] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
 			<?php endif; ?>

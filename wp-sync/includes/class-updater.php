@@ -8,9 +8,13 @@ defined( 'ABSPATH' ) || exit;
  * Each release on github.com/alexmciver/WP-Sync-Tool carries a wp-sync.zip asset,
  * built automatically by the repo's GitHub Action when the version number changes.
  *
+ * By default an update is announced (Tools → WP Sync, Plugins, Dashboard → Updates) and
+ * installed when you click "Update now". WordPress's own "Enable auto-updates" link on the
+ * Plugins screen still works if you want it hands-off for a particular site.
+ *
  * wp-config options:
- *   WPSYNC_DISABLE_AUTO_UPDATE  true = show updates but install them manually.
- *   WPSYNC_DISABLE_UPDATER      true = never contact GitHub.
+ *   WPSYNC_AUTO_UPDATE      true = always install updates automatically.
+ *   WPSYNC_DISABLE_UPDATER  true = never contact GitHub.
  */
 final class WPSync_Updater {
 
@@ -147,12 +151,36 @@ final class WPSync_Updater {
 		return new WP_Error( 'wpsync_update_folder', 'Could not prepare the WP Sync update folder.' );
 	}
 
-	/** Auto-update by default (can be turned off with WPSYNC_DISABLE_AUTO_UPDATE). */
+	/** Manual by default; WPSYNC_AUTO_UPDATE forces automatic. Otherwise WordPress's per-plugin toggle decides. */
 	public static function auto_update( $update, $item ) {
-		if ( isset( $item->plugin ) && self::basename() === $item->plugin ) {
-			return ! ( defined( 'WPSYNC_DISABLE_AUTO_UPDATE' ) && WPSYNC_DISABLE_AUTO_UPDATE );
+		if ( isset( $item->plugin ) && self::basename() === $item->plugin && defined( 'WPSYNC_AUTO_UPDATE' ) && WPSYNC_AUTO_UPDATE ) {
+			return true;
 		}
 		return $update;
+	}
+
+	/** Newer release info if one exists, else null. */
+	public static function available( $force = false ) {
+		if ( ! has_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject' ) ) ) {
+			return null; // Must-use install or updater disabled.
+		}
+		$r = self::release( $force );
+		return ( $r && $r['package'] && version_compare( $r['version'], WPSync_Config::VERSION, '>' ) ) ? $r : null;
+	}
+
+	/** Link that runs WordPress's normal plugin updater for WP Sync. */
+	public static function update_url() {
+		$base = self::basename();
+		return wp_nonce_url( self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . rawurlencode( $base ) ), 'upgrade-plugin_' . $base );
+	}
+
+	/** Force a fresh check (the "Check for updates" link). */
+	public static function check_now() {
+		delete_site_transient( self::CACHE );
+		delete_site_transient( 'update_plugins' );
+		$r = self::release( true );
+		wp_update_plugins();
+		return $r;
 	}
 
 	public static function clear( $upgrader, $options ) {
