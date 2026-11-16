@@ -1,7 +1,5 @@
 # LivePull
 
-> **LivePull was called "WP Sync" before version 1.0.** Already using WP Sync? See [Switching from WP Sync](#switching-from-wp-sync).
-
 **Pull your client's content changes from a live WordPress site into your local copy — without overwriting your own work.**
 
 You're building or fixing something on a local or staging copy. Meanwhile the client keeps adding posts, pages, products and images on the live site. Normally you either work on stale content or copy the whole database down again and lose your changes. LivePull gives you a third option: bring across just what changed on live, and leave anything you've changed locally alone.
@@ -33,16 +31,6 @@ You're building or fixing something on a local or staging copy. Meanwhile the cl
 **From GitHub:** download **`livepull.zip`** from the [latest release](https://github.com/alexmciver/WP-Sync-Tool/releases/latest) (use this file, not GitHub's "Source code" zip). On **both** sites go to *Plugins → Add New → Upload Plugin*, choose the zip and click **Activate**. The GitHub download announces its own updates (*Tools → LivePull → Check for updates*, or the Plugins screen).
 
 Update both sites so they stay on the same version.
-
-### Switching from WP Sync
-
-LivePull is the new name for WP Sync. On **each** site:
-
-1. Install and activate LivePull. It waits while WP Sync is still switched on.
-2. Deactivate **WP Sync**. LivePull takes over WP Sync's connection, change history, links between live and local content, and backups automatically.
-3. Delete WP Sync.
-
-Settings in `wp-config.php` keep working: `WPSYNC_SECRET` and the other `WPSYNC_…` settings are read as their `LIVEPULL_…` equivalents. Sites on WP Sync 0.6 that click *Update now* get a small placeholder plugin that explains these steps.
 
 ## Set up (2 minutes)
 
@@ -211,6 +199,16 @@ tests/perf.sh                        # big-site test
 **"Another pull is already running".** If nothing is running (the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks itself after 15 minutes.
 
 **Duplicate pages after a pull.** Use *Undo a pull or copy* to restore the backup from before that pull, update to the latest version (it matches existing content), and pull again.
+
+**I used the earlier version, called WP Sync. How do I switch?**
+
+LivePull is its new name. On **each** site:
+
+1. Install and activate LivePull. It waits while WP Sync is still switched on.
+2. Deactivate **WP Sync**. LivePull takes over WP Sync's connection, change history, links between live and local content, and backups automatically.
+3. Delete WP Sync.
+
+Settings in `wp-config.php` keep working: `WPSYNC_SECRET` and the other `WPSYNC_…` settings are read as their `LIVEPULL_…` equivalents. Sites on WP Sync 0.6 that click *Update now* get a small placeholder plugin that explains these steps.
 
 ## Contributing
 
