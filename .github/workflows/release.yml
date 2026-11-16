@@ -1,0 +1,61 @@
+name: Release
+
+# When the "Version:" in wp-sync.php changes on main, build wp-sync.zip and publish
+# a GitHub Release. Sites running WP Sync see it as a normal plugin update and
+# install it automatically.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: v
+        run: |
+          VERSION=$(grep -m1 -E '^\s*\*\s*Version:' wp-sync.php | sed -E 's/.*Version:\s*//' | tr -d '[:space:]')
+          CONST=$(grep -m1 "const VERSION" wp-sync/includes/class-config.php | sed -E "s/.*'([^']+)'.*/\1/")
+          if [ "$VERSION" != "$CONST" ]; then
+            echo "::error::Version mismatch: wp-sync.php says $VERSION, class-config.php says $CONST"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lint PHP
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          for f in wp-sync.php wp-sync/includes/*.php; do php -l "$f"; done
+
+      - name: Build wp-sync.zip
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          mkdir -p build/wp-sync
+          cp -r wp-sync.php wp-sync README.md build/wp-sync/
+          cd build && zip -qr wp-sync.zip wp-sync
+
+      - name: Publish release
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git log -1 --format=%B > notes.txt
+          gh release create "v${{ steps.v.outputs.version }}" build/wp-sync.zip \
+            --title "WP Sync ${{ steps.v.outputs.version }}" \
+            --notes-file notes.txt

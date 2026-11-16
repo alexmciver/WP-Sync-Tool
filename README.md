@@ -10,7 +10,9 @@ Nothing is ever written to the live site. Live only answers read-only, key-prote
 
 **As a normal plugin (easiest):** on **live** and **local**, go to **Plugins → Add New → Upload Plugin**, upload `wp-sync.zip`, and click **Activate**. To update later, upload the new zip and choose **Replace current with uploaded**.
 
-**Or as a must-use plugin** (can't be deactivated by accident): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
+**Updates are automatic.** WP Sync checks [GitHub releases](https://github.com/alexmciver/WP-Sync-Tool/releases) and updates itself like any other plugin (WordPress checks twice a day; Dashboard → Updates → Check again forces it). To see updates but install them yourself, add `define( 'WPSYNC_DISABLE_AUTO_UPDATE', true );` to wp-config.php.
+
+**Or as a must-use plugin** (can't be deactivated by accident, but doesn't auto-update): copy `wp-sync.php` **and** the `wp-sync/` folder into `wp-content/mu-plugins/`.
 
 Keep it active on live at all times: changes made on live while it's deactivated aren't recorded (use catch-up mode to recover).
 
@@ -92,6 +94,10 @@ define( 'WPSYNC_EXCLUDE_POST_TYPES', 'my_cpt,another' );   // never pull these
 define( 'WPSYNC_EXCLUDE_TAXONOMIES', 'my_tax' );
 define( 'WPSYNC_DEFAULT_AUTHOR', 'alex' );                 // fallback author on local
 ```
+
+## Releasing a new version (for developers)
+
+Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/class-config.php` (`VERSION`), then push to `main`. The GitHub Action builds `wp-sync.zip` and publishes release `vX.Y.Z`; every site picks it up on its next update check.
 
 ## Troubleshooting
 
