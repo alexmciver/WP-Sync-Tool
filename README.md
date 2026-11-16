@@ -175,11 +175,22 @@ Every release is checked by an end-to-end test suite that builds a real live sit
 
 \* Divi is a paid theme, so it isn't in the repo. Without it the suite checks Divi's saved content arrives intact; add `LIVEPULL_TEST_THEME=/path/to/Divi.zip` to also check pages display, Theme Builder and Theme Options. Divi 5 pages are checked for content only. Bricks, Oxygen, WPBakery and Brizy data is handled the same way but not yet covered by tests.
 
-To run it yourself (needs PHP, MySQL/MariaDB and WP-CLI; put plugin zips in a folder):
+The suite runs automatically on GitHub on every change, on PHP 7.4, 8.0, 8.1, 8.2, 8.3 and 8.4, together with WordPress.org's Plugin Check.
+
+**Big sites.** `tests/perf.sh` builds a live site with 10,000 posts, 1,500 images and 300 categories. Latest results:
+
+| | Time | Peak memory |
+|---|---|---|
+| First pull (11,800 items, 1,500 image files) | 3 min | 151 MB |
+| Next pull (100 edits, 20 new, 10 deleted), including the backup | 3 s | 96 MB |
+| Copy everything (89,000 database rows) | 5 s | 96 MB |
+
+To run the tests yourself (needs PHP, MySQL/MariaDB and WP-CLI; put plugin zips in a folder):
 
 ```bash
 LIVEPULL_TEST_PLUGINS=~/plugin-zips DB_USER=root DB_PASS=secret tests/run.sh
 tests/run.sh elementor woocommerce   # just some scenarios
+tests/perf.sh                        # big-site test
 ```
 
 ## Limitations

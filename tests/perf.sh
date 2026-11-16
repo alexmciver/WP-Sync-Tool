@@ -20,7 +20,7 @@ timed() { # label, command...  → prints seconds and peak memory of the command
 	start=$(date +%s.%N)
 	/usr/bin/time -f "%M" -o "$WORK/mem" "$@" 2>&1 | tail -2
 	end=$(date +%s.%N)
-	printf '  %-34s %6.1f s   peak memory %4d MB\n' "$label" "$(echo "$end - $start" | bc)" "$(( $(cat "$WORK/mem") / 1024 ))" | tee -a "$WORK/results.txt"
+	printf '  %-34s %6.1f s   peak memory %4d MB\n' "$label" "$(echo "$end - $start" | bc)" "$(( $(tail -1 "$WORK/mem") / 1024 ))" | tee -a "$WORK/results.txt"
 }
 
 site() { # dir db prefix port
@@ -29,6 +29,10 @@ site() { # dir db prefix port
 	if [ -n "${LIVEPULL_TEST_CORE:-}" ]; then cp -r "$LIVEPULL_TEST_CORE" "$1"; else wp core download --path="$1" --quiet; fi
 	wp config create --path="$1" --dbname="$2" --dbuser="$DB_USER" --dbpass="$DB_PASS" --dbhost="$DB_HOST" --dbprefix="$3" --quiet --skip-check
 	wp core install --path="$1" --url="http://localhost:$4" --title=Perf --admin_user=admin --admin_password=admin --admin_email=a@example.com --skip-email --quiet
+	wp rewrite structure '/%postname%/' --path="$1" --quiet
+	# The test web server handles one request at a time: keep WordPress's background tasks
+	# (which call wordpress.org) from queueing in front of LivePull's requests.
+	wp config set DISABLE_WP_CRON true --raw --path="$1" --quiet
 	mkdir -p "$1/wp-content/plugins/livepull"
 	cp -r "$ROOT/livepull.php" "$ROOT/includes" "$ROOT/assets" "$ROOT/uninstall.php" "$1/wp-content/plugins/livepull/"
 	wp plugin activate livepull --path="$1" --quiet
@@ -43,7 +47,7 @@ site "$WORK/local" lp_perf_local loc_ 8112
 cat > "$WORK/gen.php" <<'PHP'
 <?php
 // Bulk content for the big-site test.
-list( , $posts, $images, $terms ) = $args;
+list( $posts, $images, $terms ) = array_map( "intval", $args );
 wp_defer_term_counting( true );
 $cats = array();
 for ( $i = 1; $i <= $terms; $i++ ) {
