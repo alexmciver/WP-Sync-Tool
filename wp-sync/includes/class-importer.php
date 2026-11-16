@@ -50,9 +50,23 @@ final class WPSync_Importer {
 		if ( $this->opts['url_replace'] ) {
 			$this->build_url_map( $remote );
 		}
-		$this->maps['post']    = WPSync_Ids::map( 'post' );
-		$this->maps['term']    = WPSync_Ids::map( 'term' );
-		$this->local_changed   = self::locally_changed();
+		// Shared by every importer in this request: a pull imports a few items at a time, and
+		// rebuilding these lookups for each handful is slow on big sites.
+		if ( null === self::$shared ) {
+			self::$shared = array(
+				'maps'    => array( 'post' => WPSync_Ids::map( 'post' ), 'term' => WPSync_Ids::map( 'term' ) ),
+				'changed' => self::locally_changed(),
+			);
+		}
+		$this->maps          = &self::$shared['maps'];
+		$this->local_changed = &self::$shared['changed'];
+	}
+
+	private static $shared = null;
+
+	/** Forget the shared lookups (start of a pull, after a restore or copy). */
+	public static function reset_cache() {
+		self::$shared = null;
 	}
 
 	/* ================================================================ State */
@@ -740,6 +754,13 @@ final class WPSync_Importer {
 	public static function safe_dest( $path ) {
 		$path = wp_normalize_path( (string) $path );
 		if ( '' === $path || false !== strpos( $path, '..' ) || '/' === $path[0] || preg_match( '#^[a-z]:#i', $path ) || false !== strpos( $path, "\0" ) ) {
+			return null;
+		}
+		// Never write anything a web server could execute or obey, whatever live sends.
+		$base = strtolower( basename( $path ) );
+		if ( preg_match( '/\.(php\d?|phtml|pht|phar|phps|cgi|pl|py|sh|asp|aspx|jsp|shtml|exe|dll|so)$/', $base )
+			|| in_array( $base, array( '.htaccess', '.user.ini', 'php.ini', 'web.config', '.htpasswd' ), true )
+			|| preg_match( '/\.php\d?\./', $base ) ) {
 			return null;
 		}
 		$uploads = wp_get_upload_dir();

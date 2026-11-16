@@ -18,8 +18,10 @@ Keep it active on live at all times: changes made on live while it's deactivated
 
 ## Connect (in WordPress)
 
-1. **Live site:** go to **Tools → WP Sync**, then click **Generate key**. Copy the **Site URL** and **WP Sync key**.
-2. **Local site:** go to **Tools → WP Sync**, paste both into **"Is this your local or staging copy?"**, then click **Save and connect**.
+1. **Live site:** go to **Tools → WP Sync**, click **Generate key**, then **Copy** the **Connection code**.
+2. **Local site:** go to **Tools → WP Sync**, paste it into **Connection code**, then click **Save and connect**.
+
+(Terminal: `wp sync key` on live prints a ready-made `wp sync connect wpsync1:…` command for local.)
 
 That's it. The local screen now shows how many changes are waiting on live.
 
@@ -86,7 +88,8 @@ WP Sync records changes on live from the moment it's installed there.
 ## Restoring a backup by hand
 
 ```
-wp db import wp-content/wpsync-backups/pre-pull-YYYYMMDD-HHMMSS.sql
+wp sync backups          # lists them, newest first
+wp sync restore <file>   # or Tools → WP Sync → Undo a pull or copy
 ```
 (`.sql.gz` files: `gunzip` first, or import in phpMyAdmin.) Backups made from the admin screen contain the content tables a pull touches; terminal backups are full `wp db export` dumps.
 
@@ -118,6 +121,16 @@ define( 'WPSYNC_DEFAULT_AUTHOR', 'alex' );                 // fallback author on
 
 Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/class-config.php` (`VERSION`), then push to `main`. The GitHub Action builds `wp-sync.zip` and publishes release `vX.Y.Z`; every site picks it up on its next update check.
 
+## Security
+
+- The key only allows **reading** from live; nothing is ever written to live. It's compared in constant time and must be 32+ characters. Treat the connection code like a password.
+- Use `https://` for the live site: over plain `http://` to a public host the key travels unencrypted (WP Sync warns you).
+- **Copy everything** is **off by default** on live because it shares the whole database. Switch it on from live's WP Sync screen – **Allow for 1 hour** is usually best – or for good. Logged-in sessions are never copied.
+- **Backups** are kept outside the public web folder when the server allows (one folder per site), otherwise in `wp-content/wpsync-backups` with deny rules and unguessable file names. Override with `define( 'WPSYNC_BACKUP_DIR', '/absolute/path' );`.
+- Files from live are only written inside uploads, and never executable/config files (`.php`, `.phar`, `.htaccess`, `.user.ini`…). Media is only downloaded from the live site or public addresses – never private, internal or cloud-metadata addresses.
+- Updates are only installed from GitHub over HTTPS.
+- Deleting the plugin (Plugins → Delete) removes its settings, log, ID tags and backups.
+
 ## Troubleshooting
 
 - **"Nothing to pull" but you changed something on live**: on live, open Tools → WP Sync → *Let other sites pull from this one* → **Recent changes recorded on this site**. If your edit isn't listed, it's a kind of change WP Sync doesn't track in normal pulls (Divi Theme Builder, theme/Customizer options, widgets, plugin settings) – use **Copy everything from live**. If it is listed, make sure both sites run the same WP Sync version.
@@ -125,7 +138,9 @@ Bump the version in **both** `wp-sync.php` (`Version:`) and `wp-sync/includes/cl
 - **"Invalid sync key"**: the key on local doesn't match live's. Copy it again from live's Tools → WP Sync.
 - **401/403, "did not return JSON"**: a security plugin or firewall (Wordfence, Cloudflare, "Disable REST API") is blocking `?rest_route=/wpsync/v1/…` on live. Allow that path.
 - **"Is WP Sync installed…on the live site?" (404)**: the files aren't in live's `wp-content/mu-plugins/`, or the `wp-sync/` folder is missing next to `wp-sync.php`.
-- **"Another pull is already running"**: if nothing is running (e.g. the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks by itself after 15 minutes.
+- **"Copy everything is switched off on the live site"**: on live, Tools → WP Sync → *Let other sites pull from this one* → **Allow for 1 hour**.
+- **"WP Sync is installed more than once"**: delete the extra copy on the Plugins screen so updates go to the right one.
+- **"Another pull is already running": if nothing is running (e.g. the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks by itself after 15 minutes.
 - **"The live site returned a web page instead of data"**: a page cache or firewall on live is answering instead of WordPress. Exclude `/wp-json/` and URLs containing `rest_route=` from caching (host cache, cache plugin, Cloudflare rules).
 - **Quick check from a browser:** open `https://your-live-site/wp-json/wpsync/v1/status`. You should see `{"code":"wpsync_forbidden","message":"Invalid sync key." …}`, which is correct: it means WP Sync is running and protected. A web page means something is caching it; `rest_no_route` means the plugin isn't active.
 - **Pull seems slow**: the first pull downloads every image size for each new media item. The progress line shows what it's doing; you can Cancel at any time and press Pull again to carry on.

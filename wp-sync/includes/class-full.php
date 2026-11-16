@@ -111,11 +111,31 @@ final class WPSync_Full {
 
 	/* ============================================================== Live side */
 
+	/**
+	 * Full copies hand over the whole database (users, settings, API keys in plugin settings),
+	 * so they're off unless switched on – for an hour, or always – on live's WP Sync screen.
+	 */
 	public static function allowed() {
 		if ( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
 			return (bool) WPSYNC_ALLOW_FULL_COPY;
 		}
-		return 'no' !== get_option( 'wpsync_allow_full_copy', 'yes' );
+		$v = get_option( 'wpsync_allow_full_copy', 'no' );
+		if ( 'always' === $v || 'yes' === $v ) {
+			return true;
+		}
+		return is_numeric( $v ) && (int) $v > time();
+	}
+
+	/** 'off' | 'always' | seconds left. */
+	public static function permission() {
+		if ( defined( 'WPSYNC_ALLOW_FULL_COPY' ) ) {
+			return WPSYNC_ALLOW_FULL_COPY ? 'always' : 'off';
+		}
+		$v = get_option( 'wpsync_allow_full_copy', 'no' );
+		if ( 'always' === $v || 'yes' === $v ) {
+			return 'always';
+		}
+		return ( is_numeric( $v ) && (int) $v > time() ) ? (int) $v - time() : 'off';
 	}
 
 	/** Table names (without prefix) that are never worth copying (logs, sessions, caches). */
@@ -185,10 +205,18 @@ final class WPSync_Full {
 		} else {
 			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM `{$full}` LIMIT %d, %d", (int) $cursor, $limit ), ARRAY_A );
 		}
-		$out   = array();
-		$bytes = 0;
-		$last  = null;
+		$out      = array();
+		$bytes    = 0;
+		$last     = null;
+		$consumed = 0;
 		foreach ( $rows as $row ) {
+			$consumed++;
+			// Logged-in sessions stay on live: copying them would let a copy of the database
+			// be used to hijack live logins.
+			if ( 'usermeta' === $name && isset( $row['meta_key'] ) && 'session_tokens' === $row['meta_key'] ) {
+				$last = $row;
+				continue;
+			}
 			$enc = array();
 			foreach ( $row as $col => $v ) {
 				if ( null !== $v && ! preg_match( '//u', $v ) ) {
@@ -203,11 +231,11 @@ final class WPSync_Full {
 				break;
 			}
 		}
-		$next = $keyset ? ( $last ? (string) $last[ $pk ] : $cursor ) : (string) ( (int) $cursor + count( $out ) );
+		$next     = $keyset ? ( $last ? (string) $last[ $pk ] : $cursor ) : (string) ( (int) $cursor + $consumed );
 		return array(
 			'rows'   => $out,
 			'cursor' => $next,
-			'done'   => count( $out ) < $limit && count( $out ) === count( $rows ),
+			'done'   => count( $rows ) < $limit && $consumed === count( $rows ),
 		);
 	}
 
@@ -273,7 +301,7 @@ final class WPSync_Full {
 			return $remote;
 		}
 		if ( empty( $remote['full_copy'] ) ) {
-			return new WP_Error( 'wpsync_full_off', 'The live site has full copies switched off (Tools → WP Sync on live → "Allow full copies"), or its WP Sync is older than 0.4.0 – update it first.' );
+			return new WP_Error( 'wpsync_full_off', 'Copy everything is switched off on the live site (it shares the whole database, so it\'s off by default). On live, open Tools → WP Sync → "Let other sites pull from this one" and click "Allow for 1 hour", then try again here.' );
 		}
 		if ( get_transient( WPSync_Puller::LOCK ) ) {
 			return new WP_Error( 'wpsync_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
@@ -375,14 +403,32 @@ final class WPSync_Full {
 				return new WP_Error( 'wpsync_cancelled', 'Cancelled. Nothing on this site was changed.' );
 			}
 			if ( 'backup' === $state['phase'] ) {
-				$state['activity'] = 'Backing up this site\'s whole database…';
-				$file              = WPSync_Backup::create( true );
-				if ( is_wp_error( $file ) ) {
-					self::abort();
-					return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+				if ( defined( 'WP_CLI' ) && WP_CLI ) {
+					$state['activity'] = 'Backing up this site\'s whole database…';
+					$file              = WPSync_Backup::create( true );
+					if ( is_wp_error( $file ) ) {
+						self::abort();
+						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+					}
+					$state['backup_file'] = $file;
+					$state['phase']       = 'tables';
+				} else {
+					// In the browser: a few thousand rows per request, so big databases can't time out.
+					if ( empty( $state['bk'] ) ) {
+						$state['bk'] = WPSync_Backup::chunk_start( true );
+					}
+					$state['activity'] = sprintf( 'Backing up this site\'s database (table %d of %d)…', min( $state['bk']['ti'] + 1, count( $state['bk']['tables'] ) ), count( $state['bk']['tables'] ) );
+					$r = WPSync_Backup::chunk_step( $state['bk'], $out );
+					if ( is_wp_error( $r ) ) {
+						self::abort();
+						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $r->get_error_message() );
+					}
+					if ( true === $r ) {
+						$state['backup_file'] = $state['bk']['file'];
+						unset( $state['bk'] );
+						$state['phase'] = 'tables';
+					}
 				}
-				$state['backup_file'] = $file;
-				$state['phase']       = 'tables';
 			} elseif ( 'tables' === $state['phase'] ) {
 				if ( $state['ti'] >= count( $state['tables'] ) ) {
 					$state['phase'] = $state['opts']['files'] ? 'files' : 'swap';

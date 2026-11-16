@@ -152,6 +152,15 @@ final class WPSync_Ids {
 		return $sid;
 	}
 
+	/** Backfill at most every 10 minutes (it scans every post and term). */
+	public static function maybe_backfill() {
+		if ( get_transient( 'wpsync_backfilled' ) ) {
+			return;
+		}
+		self::backfill();
+		set_transient( 'wpsync_backfilled', 1, 10 * MINUTE_IN_SECONDS );
+	}
+
 	/** @return array<string,int> sync ID => local object ID */
 	public static function map( $kind ) {
 		global $wpdb;

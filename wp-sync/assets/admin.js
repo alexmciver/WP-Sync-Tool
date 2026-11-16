@@ -47,6 +47,8 @@
 			} );
 	}
 
+	function n( count, one, many ) { return count + ' ' + ( count === 1 ? one : many ); }
+
 	function el( tag, cls, text ) {
 		var e = document.createElement( tag );
 		if ( cls ) { e.className = cls; }
@@ -109,7 +111,15 @@
 			statusBox.appendChild( stat( 'changes waiting on live', d.waiting, d.waiting ? 'is-hot' : '' ) );
 			statusBox.appendChild( stat( 'changed here since last pull', d.local ) );
 			statusBox.appendChild( stat( 'conflicts', d.conflicts, d.conflicts ? 'is-warn' : '' ) );
+			var ls = d.last_summary;
 			statusBox.appendChild( stat( 'last pull', d.last_pull ) );
+			var sum = $( '#wpsync-last-summary' );
+			if ( sum ) {
+				sum.hidden = ! ls;
+				if ( ls ) {
+					sum.textContent = 'Last pull: ' + ls.created + ' new, ' + ls.updated + ' updated, ' + ls.deleted + ' deleted, ' + n( ls.conflicts, 'conflict', 'conflicts' ) + ( ls.files ? ', ' + n( ls.files, 'file', 'files' ) + ' downloaded' : '' ) + ( ls.errors ? ' – ' + n( ls.errors, 'error', 'errors' ) : '' ) + '.';
+				}
+			}
 			notices.innerHTML = '';
 			( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
 			var rec = $( '#wpsync-recording' );
@@ -130,8 +140,6 @@
 	}
 
 	/* ------------------------------------------------------------------ Pull */
-
-	function n( count, one, many ) { return count + ' ' + ( count === 1 ? one : many ); }
 
 	function list( title, items, cls, fmt ) {
 		if ( ! items || ! items.length ) { return null; }

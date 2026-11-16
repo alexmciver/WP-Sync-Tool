@@ -58,7 +58,7 @@ final class WPSync_Client {
 					sprintf(
 						'The live site returned a web page instead of data (HTTP %d%s). This is usually a page cache or firewall answering instead of WordPress. Exclude /wp-json/ and URLs containing rest_route= from caching on live (host cache, cache plugin, Cloudflare "Cache Everything" rules).',
 						$code,
-						$snippet ? ': "' . mb_substr( $snippet, 0, 80 ) . '…"' : ''
+						$snippet ? ': "' . substr( $snippet, 0, 80 ) . '…"' : ''
 					),
 					array( 'status' => $code, 'url' => $url )
 				);
@@ -78,8 +78,37 @@ final class WPSync_Client {
 		return $last_error;
 	}
 
+	/**
+	 * Media may come from the live site itself or a public CDN, but never from a private or
+	 * internal address (a compromised or spoofed live site must not be able to make this
+	 * server fetch things from its own network).
+	 */
+	private function url_allowed( $url ) {
+		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
+			return false;
+		}
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( $host && $host === strtolower( (string) wp_parse_url( $this->base, PHP_URL_HOST ) ) ) {
+			return true;
+		}
+		if ( ! wp_http_validate_url( $url ) ) {
+			return false;
+		}
+		// Also refuse link-local / reserved ranges WordPress's check lets through
+		// (e.g. 169.254.169.254, which hands out credentials on cloud servers).
+		$ip = filter_var( $host, FILTER_VALIDATE_IP ) ? $host : gethostbyname( $host );
+		if ( ! filter_var( $ip, FILTER_VALIDATE_IP ) ) {
+			return false;
+		}
+		return false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
+	}
+
 	/** @return true|WP_Error */
 	public function download( $url, $dest ) {
+		if ( ! $this->url_allowed( $url ) ) {
+			return new WP_Error( 'wpsync_url', 'Refused to download from ' . wp_parse_url( $url, PHP_URL_HOST ) . ' (not the live site or a public address).' );
+		}
 		wp_mkdir_p( dirname( $dest ) );
 		$tmp = $dest . '.wpsync-part';
 		$res = wp_remote_get( $url, array( 'timeout' => 60, 'redirection' => 3, 'stream' => true, 'filename' => $tmp, 'headers' => $this->download_headers( $url ), 'sslverify' => self::sslverify() ) );
