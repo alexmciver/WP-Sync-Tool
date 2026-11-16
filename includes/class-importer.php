@@ -246,6 +246,34 @@ final class LivePull_Importer {
 		return sprintf( '%s "%s"%s', isset( $p['post_type'] ) ? $p['post_type'] : 'post', isset( $p['post_title'] ) && '' !== $p['post_title'] ? $p['post_title'] : '(no title)', $local_id ? " (local #{$local_id})" : '' );
 	}
 
+	/**
+	 * Why an incoming item must not be applied here, or '' if it's fine. Live is trusted to
+	 * send content, never settings or kinds of content outside what LivePull pulls: this
+	 * stops a compromised or spoofed live site from changing anything else on this site.
+	 */
+	public static function refused( array $item ) {
+		$type = isset( $item['type'] ) ? $item['type'] : '';
+		if ( ! in_array( $type, array( 'post', 'term', 'option' ), true ) || empty( $item['sync_id'] ) || ! is_string( $item['sync_id'] ) ) {
+			return 'Ignored an item of an unknown kind sent by live.';
+		}
+		if ( ! empty( $item['deleted'] ) ) {
+			return ''; // Deletions only ever touch items already linked here.
+		}
+		if ( 'post' === $type ) {
+			$pt = isset( $item['post']['post_type'] ) ? (string) $item['post']['post_type'] : '';
+			return LivePull_Config::post_type_ok( $pt ) ? '' : sprintf( 'Ignored content of type "%s": that type isn\'t pulled.', $pt );
+		}
+		if ( 'term' === $type ) {
+			$tax = isset( $item['term']['taxonomy'] ) ? (string) $item['term']['taxonomy'] : '';
+			return LivePull_Config::taxonomy_ok( $tax ) ? '' : sprintf( 'Ignored a term in "%s": that taxonomy isn\'t pulled.', $tax );
+		}
+		$name = isset( $item['option']['name'] ) ? (string) $item['option']['name'] : '';
+		if ( '' === $name || ! LivePull_Config::option_allowed( $name ) || LivePull_Config::option_sid( $name ) !== $item['sync_id'] ) {
+			return sprintf( 'Ignored the setting "%s": LivePull doesn\'t pull that setting.', $name );
+		}
+		return '';
+	}
+
 	public static function option_name( $sid ) {
 		foreach ( LivePull_Config::pulled_option_names() as $n ) {
 			if ( LivePull_Config::option_sid( $n ) === $sid ) {
@@ -266,7 +294,7 @@ final class LivePull_Importer {
 		}
 		if ( ! empty( $item['deleted'] ) ) {
 			$name = self::option_name( $item['sync_id'] );
-			if ( $name && true === LivePull_Config::option_spec( $name ) && false !== get_option( $name, false ) ) {
+			if ( $name && LivePull_Config::option_allowed( $name ) && true === LivePull_Config::option_spec( $name ) && false !== get_option( $name, false ) ) {
 				if ( ! $this->opts['dry_run'] ) {
 					delete_option( $name );
 					$this->mark_synced( 'option', $item['sync_id'], 0 );
@@ -287,7 +315,7 @@ final class LivePull_Importer {
 
 	/** Skip settings that already match (ignoring ID differences, which are rewritten later). */
 	private function option_differs( array $item ) {
-		$o   = $item['option'];
+		$o   = self::option_as_allowed( $item['option'] );
 		$new = $this->urls( LivePull_Payload::unserialize( $o['value'] ) );
 		$cur = get_option( $o['name'], null );
 		if ( 'keys' === $o['mode'] ) {
@@ -296,8 +324,28 @@ final class LivePull_Importer {
 		return maybe_serialize( $cur ) !== maybe_serialize( $new ) || LivePull_Config::option_refs( $o['name'] );
 	}
 
+	/**
+	 * The option as this site allows it: whole-value options as sent; "sub-key" options
+	 * (e.g. the theme's menu locations and logo) reduced to the allowed keys only.
+	 */
+	private static function option_as_allowed( array $o ) {
+		$spec = LivePull_Config::option_spec( $o['name'] );
+		if ( is_array( $spec ) ) {
+			$value      = LivePull_Payload::unserialize( $o['value'] );
+			$value      = is_array( $value ) ? array_intersect_key( $value, array_flip( $spec ) ) : array();
+			$o['mode']  = 'keys';
+			$o['value'] = serialize( $value ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- same format the payload uses.
+		} else {
+			$o['mode'] = 'whole';
+		}
+		return $o;
+	}
+
 	private function apply_option( array $item, $cb ) {
-		$o     = $item['option'];
+		if ( self::refused( $item ) ) {
+			return;
+		}
+		$o     = self::option_as_allowed( $item['option'] );
 		$value = $this->urls( LivePull_Payload::unserialize( $o['value'] ) );
 		$refs  = LivePull_Config::option_refs( $o['name'] );
 		if ( is_array( $refs ) && is_array( $value ) ) {
@@ -326,11 +374,18 @@ final class LivePull_Importer {
 
 	/** @return int local ID (0 if not created) */
 	private function handle( array $item ) {
-		$type = $item['type'];
-		$sid  = $item['sync_id'];
+		$type = isset( $item['type'] ) ? (string) $item['type'] : '';
+		$sid  = isset( $item['sync_id'] ) ? (string) $item['sync_id'] : '';
 		$key  = $type . ':' . $sid;
 		if ( isset( $this->handled[ $key ] ) ) {
 			return $this->handled[ $key ];
+		}
+		// Only accept what normal pulls are meant to bring over, whatever live sends.
+		$refused = self::refused( $item );
+		if ( $refused ) {
+			$this->handled[ $key ]       = 0;
+			$this->report['skipped'][] = $refused;
+			return 0;
 		}
 		if ( 'option' === $type ) {
 			return $this->handle_option( $item, $key );

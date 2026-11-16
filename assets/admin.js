@@ -1,6 +1,7 @@
 /* LivePull admin screen */
 ( function () {
 	'use strict';
+	var __ = ( window.wp && window.wp.i18n ) ? window.wp.i18n.__ : function ( text ) { return text; };
 	var cfg = window.LIVEPULL || {};
 	window.LIVEPULL_LOADED = true;
 	var $ = function ( sel, root ) { return ( root || document ).querySelector( sel ); };
@@ -22,24 +23,24 @@
 			.catch( function ( e ) {
 				if ( ctrl && ctrl.signal.aborted ) {
 					var err = new Error( ctrl.signal.reason === 'timeout'
-						? 'This site stopped responding while pulling (no reply for ' + Math.round( timeoutMs / 1000 ) + ' seconds). Progress up to the last finished batch is saved. Try again; if it keeps happening, the live site may be slow or blocking requests.'
-						: 'Cancelled.' );
+						? __( 'This site stopped responding while pulling (no reply for ', 'livepull' ) + Math.round( timeoutMs / 1000 ) + __( ' seconds). Progress up to the last finished batch is saved. Try again; if it keeps happening, the live site may be slow or blocking requests.', 'livepull' )
+						: __( 'Cancelled.', 'livepull' ) );
 					err.code = ctrl.signal.reason === 'timeout' ? 'timeout' : 'cancelled';
 					throw err;
 				}
-				throw new Error( 'Network error: ' + e.message );
+				throw new Error( __( 'Network error: ', 'livepull' ) + e.message );
 			} )
 			.then( function ( r ) { clearTimeout( timer ); return r; } )
 			.then( function ( r ) {
 				return r.text().then( function ( t ) {
 					try { return JSON.parse( t ); } catch ( e ) {
-						throw new Error( 'The server returned an unexpected response (HTTP ' + r.status + '). ' + ( r.status >= 500 ? 'Check the PHP error log; a pull step may have run out of time or memory.' : '' ) );
+						throw new Error( __( 'The server returned an unexpected response (HTTP ', 'livepull' ) + r.status + '). ' + ( r.status >= 500 ? __( 'Check the PHP error log; a pull step may have run out of time or memory.', 'livepull' ) : '' ) );
 					}
 				} );
 			} )
 			.then( function ( j ) {
 				if ( ! j || ! j.success ) {
-					var err = new Error( ( j && j.data && j.data.message ) || 'Request failed.' );
+					var err = new Error( ( j && j.data && j.data.message ) || __( 'Request failed.', 'livepull' ) );
 					err.code = j && j.data && j.data.code;
 					throw err;
 				}
@@ -72,14 +73,14 @@
 			( navigator.clipboard ? navigator.clipboard.writeText( val ) : Promise.reject() ).catch( function () {
 				var t = input.type; input.type = 'text'; input.select(); document.execCommand( 'copy' ); input.type = t;
 			} );
-			b.textContent = 'Copied'; setTimeout( function () { b.textContent = 'Copy'; }, 1500 );
+			b.textContent = __( 'Copied', 'livepull' ); setTimeout( function () { b.textContent = __( 'Copy', 'livepull' ); }, 1500 );
 		} );
 	} );
 	$$( '.livepull-reveal' ).forEach( function ( b ) {
 		b.addEventListener( 'click', function () {
 			var input = b.parentNode.querySelector( 'input' );
 			input.type = input.type === 'password' ? 'text' : 'password';
-			b.textContent = input.type === 'password' ? 'Show' : 'Hide';
+			b.textContent = input.type === 'password' ? __( 'Show', 'livepull' ) : __( 'Hide', 'livepull' );
 		} );
 	} );
 
@@ -104,20 +105,20 @@
 
 	function loadStatus() {
 		statusBox.className = 'livepull-status is-loading';
-		statusBox.innerHTML = '<span class="spinner is-active"></span> Checking live site…';
+		statusBox.innerHTML = '<span class="spinner is-active"></span> ' + __( 'Checking live site…', 'livepull' );
 		return post( 'livepull_status' ).then( function ( d ) {
 			statusBox.className = 'livepull-status';
 			statusBox.innerHTML = '';
-			statusBox.appendChild( stat( 'changes waiting on live', d.waiting, d.waiting ? 'is-hot' : '' ) );
-			statusBox.appendChild( stat( 'changed here since last pull', d.local ) );
+			statusBox.appendChild( stat( __( 'changes waiting on live', 'livepull' ), d.waiting, d.waiting ? 'is-hot' : '' ) );
+			statusBox.appendChild( stat( __( 'changed here since last pull', 'livepull' ), d.local ) );
 			statusBox.appendChild( stat( 'conflicts', d.conflicts, d.conflicts ? 'is-warn' : '' ) );
 			var ls = d.last_summary;
-			statusBox.appendChild( stat( 'last pull', d.last_pull ) );
+			statusBox.appendChild( stat( __( 'last pull', 'livepull' ), d.last_pull ) );
 			var sum = $( '#livepull-last-summary' );
 			if ( sum ) {
 				sum.hidden = ! ls;
 				if ( ls ) {
-					sum.textContent = 'Last pull: ' + ls.created + ' new, ' + ls.updated + ' updated, ' + ls.deleted + ' deleted, ' + n( ls.conflicts, 'conflict', 'conflicts' ) + ( ls.files ? ', ' + n( ls.files, 'file', 'files' ) + ' downloaded' : '' ) + ( ls.errors ? ' – ' + n( ls.errors, 'error', 'errors' ) : '' ) + '.';
+					sum.textContent = __( 'Last pull: ', 'livepull' ) + ls.created + __( ' new, ', 'livepull' ) + ls.updated + __( ' updated, ', 'livepull' ) + ls.deleted + __( ' deleted, ', 'livepull' ) + n( ls.conflicts, 'conflict', 'conflicts' ) + ( ls.files ? ', ' + n( ls.files, 'file', 'files' ) + __( ' downloaded', 'livepull' ) : '' ) + ( ls.errors ? ' – ' + n( ls.errors, 'error', 'errors' ) : '' ) + '.';
 				}
 			}
 			notices.innerHTML = '';
@@ -125,7 +126,7 @@
 			var rec = $( '#livepull-recording' );
 			if ( rec && d.recording_since && d.never_pulled ) {
 				rec.hidden = false;
-				rec.textContent = 'Live has been recording changes since ' + d.recording_since + '. Content that differed before then needs "Pull all content from live" (More options).';
+				rec.textContent = __( 'Live has been recording changes since ', 'livepull' ) + d.recording_since + __( '. Content that differed before then needs "Pull all content from live" (More options).', 'livepull' );
 			}
 			btnPreview.disabled = btnPull.disabled = false;
 		} ).catch( function ( e ) {
@@ -159,27 +160,27 @@
 		result.innerHTML = '';
 		var total = r.created.length + r.updated.length + r.deleted.length;
 		var head = el( 'div', 'livepull-summary ' + ( r.errors.length ? 'is-error' : 'is-ok' ) );
-		var verb = d.dry ? 'Preview: ' : 'Done: ';
-		head.appendChild( el( 'strong', '', verb + ( total || r.conflicts.length ? '' : 'nothing to pull. ' ) ) );
+		var verb = d.dry ? __( 'Preview: ', 'livepull' ) : __( 'Done: ', 'livepull' );
+		head.appendChild( el( 'strong', '', verb + ( total || r.conflicts.length ? '' : __( 'nothing to pull. ', 'livepull' ) ) ) );
 		head.appendChild( document.createTextNode(
-			r.created.length + ' new, ' + r.updated.length + ' updated, ' + r.deleted.length + ' deleted, ' +
-			n( r.conflicts.length, 'conflict', 'conflicts' ) + ( d.dry ? '' : ', ' + n( r.files, 'media file', 'media files' ) + ' downloaded' ) + '.'
+			r.created.length + __( ' new, ', 'livepull' ) + r.updated.length + __( ' updated, ', 'livepull' ) + r.deleted.length + __( ' deleted, ', 'livepull' ) +
+			n( r.conflicts.length, 'conflict', 'conflicts' ) + ( d.dry ? '' : ', ' + n( r.files, __( 'media file', 'livepull' ), __( 'media files', 'livepull' ) ) + __( ' downloaded', 'livepull' ) ) + '.'
 		) );
-		if ( d.backup ) { head.appendChild( el( 'div', 'description', 'Backup saved first: ' + d.backup ) ); }
+		if ( d.backup ) { head.appendChild( el( 'div', 'description', __( 'Backup saved first: ', 'livepull' ) + d.backup ) ); }
 		result.appendChild( head );
 
 		[
-			list( d.dry ? 'Would create' : 'Created', r.created ),
-			list( d.dry ? 'Would update' : 'Updated', r.updated ),
-			list( d.dry ? 'Would delete' : 'Deleted', r.deleted ),
-			list( 'Conflicts, left as they are here', r.conflicts, 'is-warn', function ( c ) { return c.label + ' – ' + c.reason; } ),
-			list( 'Skipped', r.skipped, 'is-warn' ),
-			list( 'Errors', r.errors, 'is-error' )
+			list( d.dry ? __( 'Would create', 'livepull' ) : __( 'Created', 'livepull' ), r.created ),
+			list( d.dry ? __( 'Would update', 'livepull' ) : __( 'Updated', 'livepull' ), r.updated ),
+			list( d.dry ? __( 'Would delete', 'livepull' ) : __( 'Deleted', 'livepull' ), r.deleted ),
+			list( __( 'Conflicts, left as they are here', 'livepull' ), r.conflicts, 'is-warn', function ( c ) { return c.label + ' – ' + c.reason; } ),
+			list( __( 'Skipped', 'livepull' ), r.skipped, 'is-warn' ),
+			list( __( 'Errors', 'livepull' ), r.errors, 'is-error' )
 		].forEach( function ( n ) { if ( n ) { result.appendChild( n ); } } );
 
 		if ( d.dry && total ) {
 			var p = el( 'p' );
-			var b = el( 'button', 'button button-primary', 'Pull these changes now' );
+			var b = el( 'button', 'button button-primary', __( 'Pull these changes now', 'livepull' ) );
 			b.type = 'button';
 			b.addEventListener( 'click', function () { run( false ); } );
 			p.appendChild( b );
@@ -207,15 +208,15 @@
 		bar.style.width = pct + '%';
 		if ( d ) {
 			var r = d.report;
-			lastActivity = ( d.done ? 'Finished' : ( d.activity || 'Working…' ) );
-			lastCounts = r.created.length + ' new · ' + r.updated.length + ' updated · ' + r.deleted.length + ' deleted · ' + n( r.conflicts.length, 'conflict', 'conflicts' ) + ( r.files ? ' · ' + n( r.files, 'file', 'files' ) + ' downloaded' : '' );
+			lastActivity = ( d.done ? __( 'Finished', 'livepull' ) : ( d.activity || __( 'Working…', 'livepull' ) ) );
+			lastCounts = r.created.length + __( ' new · ', 'livepull' ) + r.updated.length + __( ' updated · ', 'livepull' ) + r.deleted.length + __( ' deleted · ', 'livepull' ) + n( r.conflicts.length, 'conflict', 'conflicts' ) + ( r.files ? ' · ' + n( r.files, 'file', 'files' ) + __( ' downloaded', 'livepull' ) : '' );
 			paintProgress();
 		}
 	}
 
 	function run( dry ) {
 		if ( running ) { return; }
-		if ( ! dry && $( '#livepull-theirs' ).checked && ! window.confirm( 'Live will overwrite your local edits wherever both changed. Continue?' ) ) { return; }
+		if ( ! dry && $( '#livepull-theirs' ).checked && ! window.confirm( __( 'Live will overwrite your local edits wherever both changed. Continue?', 'livepull' ) ) ) { return; }
 		running = true;
 		btnPreview.disabled = btnPull.disabled = true;
 		result.innerHTML = '';
@@ -223,13 +224,13 @@
 		progress.hidden = false;
 		$( '.livepull-bar span', progress ).style.width = '2%';
 		startedAt = Date.now();
-		lastActivity = dry ? 'Checking what would change…' : 'Connecting to live…';
+		lastActivity = dry ? __( 'Checking what would change…', 'livepull' ) : __( 'Connecting to live…', 'livepull' );
 		lastCounts = '';
 		paintProgress();
 		ticker = setInterval( paintProgress, 1000 );
 		btnCancel.hidden = false;
 		cancelled = false;
-		window.onbeforeunload = function () { return 'A pull is running.'; };
+		window.onbeforeunload = function () { return __( 'A pull is running.', 'livepull' ); };
 
 		var params = {
 			step: 'start',
@@ -241,7 +242,7 @@
 		};
 
 		function next( p ) {
-			if ( cancelled ) { var e = new Error( 'Cancelled.' ); e.code = 'cancelled'; return Promise.reject( e ); }
+			if ( cancelled ) { var e = new Error( __( 'Cancelled.', 'livepull' ) ); e.code = 'cancelled'; return Promise.reject( e ); }
 			return post( 'livepull_pull', p, 180000 ).then( function ( d ) {
 				( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
 				setProgress( d );
@@ -261,10 +262,10 @@
 			}
 		} ).catch( function ( e ) {
 			if ( e.code === 'cancelled' ) {
-				notice( result, 'warning', 'Stopped. Everything up to the last finished batch is kept; press Pull again to continue.' );
+				notice( result, 'warning', __( 'Stopped. Everything up to the last finished batch is kept; press Pull again to continue.', 'livepull' ) );
 			} else if ( e.code === 'livepull_locked' ) {
-				var n2 = notice( result, 'warning', e.message + ' If you know nothing is running (for example the page was closed mid-pull), unlock it: ' );
-				var ub = el( 'button', 'button', 'Unlock and pull again' );
+				var n2 = notice( result, 'warning', e.message + __( ' If you know nothing is running (for example the page was closed mid-pull), unlock it: ', 'livepull' ) );
+				var ub = el( 'button', 'button', __( 'Unlock and pull again', 'livepull' ) );
 				ub.type = 'button';
 				ub.addEventListener( 'click', function () {
 					post( 'livepull_cancel' ).then( function () { result.innerHTML = ''; run( dry ); } );
@@ -289,7 +290,7 @@
 	btnCancel.addEventListener( 'click', function () {
 		cancelled = true;
 		btnCancel.hidden = true;
-		lastActivity = 'Stopping after the current step…';
+		lastActivity = __( 'Stopping after the current step…', 'livepull' );
 		paintProgress();
 		if ( controller ) { controller.abort( 'cancel' ); }
 		post( 'livepull_cancel' ).catch( function () {} );
@@ -305,7 +306,7 @@
 		var keep = e.target.closest( '.livepull-keep' );
 		if ( ! take && ! keep ) { return; }
 		var row = e.target.closest( 'tr' );
-		if ( take && ! window.confirm( 'Replace your local version of this item with the live version? (A backup is made first.)' ) ) { return; }
+		if ( take && ! window.confirm( __( 'Replace your local version of this item with the live version? (A backup is made first.)', 'livepull' ) ) ) { return; }
 		$$( 'button', row ).forEach( function ( b ) { b.disabled = true; } );
 		var cell = $( '.livepull-row-actions', row );
 		post( 'livepull_resolve', { key: row.getAttribute( 'data-key' ), mode: take ? 'take' : 'keep' } ).then( function ( d ) {
@@ -336,37 +337,37 @@
 		fullCancel.addEventListener( 'click', function () {
 			fullStop = true;
 			fullCancel.hidden = true;
-			setFull( 0, 'Cancelling…' );
+			setFull( 0, __( 'Cancelling…', 'livepull' ) );
 			post( 'livepull_full', { step: 'cancel' } ).catch( function () {} ); // Stops the running step on the server.
 		} );
 		fullBtn.addEventListener( 'click', function () {
 			if ( running ) { return; }
-			if ( ! window.confirm( 'Replace this site\'s WHOLE database with a copy of live?\n\nEverything here (content, settings, users) becomes what\'s on live. Your current database is backed up first and can be restored from "Undo a pull or copy".\n\nAfterwards, log in with your live site\'s username and password.' ) ) { return; }
+			if ( ! window.confirm( __( 'Replace this site\'s WHOLE database with a copy of live?\n\nEverything here (content, settings, users) becomes what\'s on live. Your current database is backed up first and can be restored from "Undo a pull or copy".\n\nAfterwards, log in with your live site\'s username and password.', 'livepull' ) ) ) { return; }
 			running = true; fullStop = false;
 			fullBtn.disabled = btnPull.disabled = btnPreview.disabled = true;
 			fullCancel.hidden = false; fullProg.hidden = false; fullRes.innerHTML = '';
 			var t0 = Date.now();
-			setFull( 2, 'Connecting to live…' );
-			window.onbeforeunload = function () { return 'A copy is running.'; };
+			setFull( 2, __( 'Connecting to live…', 'livepull' ) );
+			window.onbeforeunload = function () { return __( 'A copy is running.', 'livepull' ); };
 			var next = function ( p ) {
 				if ( fullStop ) {
-					var e = new Error( 'Cancelled. Nothing on this site was changed.' ); e.code = 'cancelled';
+					var e = new Error( __( 'Cancelled. Nothing on this site was changed.', 'livepull' ) ); e.code = 'cancelled';
 					return Promise.reject( e );
 				}
 				return post( 'livepull_full', p, 300000 ).then( function ( d ) {
 					( d.notices || [] ).forEach( function ( m ) { notice( fullRes, 'info', m ); } );
 					var secs = Math.round( ( Date.now() - t0 ) / 1000 );
-					setFull( d.pct, d.activity + ' · ' + d.rows.toLocaleString() + ' rows' + ( d.files_got ? ' · ' + d.files_got + ' files downloaded' : '' ) + ' · ' + ( secs < 60 ? secs + 's' : Math.floor( secs / 60 ) + 'm ' + ( secs % 60 ) + 's' ) );
+					setFull( d.pct, d.activity + ' · ' + d.rows.toLocaleString() + __( ' rows', 'livepull' ) + ( d.files_got ? ' · ' + d.files_got + __( ' files downloaded', 'livepull' ) : '' ) + ' · ' + ( secs < 60 ? secs + 's' : Math.floor( secs / 60 ) + 'm ' + ( secs % 60 ) + 's' ) );
 					return d.done ? d : next( { step: 'next' } );
 				} );
 			};
 			next( { step: 'start', files: $( '#livepull-full-files' ).checked ? 1 : '' } ).then( function ( d ) {
 				window.onbeforeunload = null;
-				var n = notice( fullRes, 'success', 'Done: this site is now a copy of live (' + d.tables + ' tables, ' + d.rows.toLocaleString() + ' rows' + ( d.files_got ? ', ' + d.files_got + ' files downloaded' : '' ) + '). From now on, normal pulls bring across only what changes on live. ' );
-				var a = el( 'a', 'button button-primary', 'Log in again (use your live username and password)' );
+				var n = notice( fullRes, 'success', __( 'Done: this site is now a copy of live (', 'livepull' ) + d.tables + __( ' tables, ', 'livepull' ) + d.rows.toLocaleString() + __( ' rows', 'livepull' ) + ( d.files_got ? ', ' + d.files_got + __( ' files downloaded', 'livepull' ) : '' ) + __( '). From now on, normal pulls bring across only what changes on live. ', 'livepull' ) );
+				var a = el( 'a', 'button button-primary', __( 'Log in again (use your live username and password)', 'livepull' ) );
 				a.href = d.login;
 				n.querySelector( 'p' ).appendChild( a );
-				if ( d.errors && d.errors.length ) { fullRes.appendChild( list( 'Warnings', d.errors, 'is-warn' ) ); }
+				if ( d.errors && d.errors.length ) { fullRes.appendChild( list( __( 'Warnings', 'livepull' ), d.errors, 'is-warn' ) ); }
 			} ).catch( function ( e ) {
 				window.onbeforeunload = null;
 				var wasCancel = e.code === 'cancelled' || e.code === 'livepull_cancelled';
@@ -386,15 +387,15 @@
 		var b = e.target.closest( '.livepull-restore' );
 		if ( ! b ) { return; }
 		var when = b.closest( 'tr' ).querySelector( 'td' ).textContent.trim();
-		if ( ! window.confirm( 'Restore the backup from ' + when + '?\n\nEverything pulled or edited on this site since then will be undone. (Your current state is backed up first, so you can undo this too.)' ) ) { return; }
+		if ( ! window.confirm( __( 'Restore the backup from ', 'livepull' ) + when + __( '?\n\nEverything pulled or edited on this site since then will be undone. (Your current state is backed up first, so you can undo this too.)', 'livepull' ) ) ) { return; }
 		$$( '.livepull-restore' ).forEach( function ( x ) { x.disabled = true; } );
-		b.textContent = 'Restoring…';
+		b.textContent = __( 'Restoring…', 'livepull' );
 		post( 'livepull_restore', { file: b.getAttribute( 'data-file' ) }, 600000 ).then( function ( d ) {
 			window.onbeforeunload = null;
 			window.location.href = d.redirect;
 		} ).catch( function ( err ) {
 			$$( '.livepull-restore' ).forEach( function ( x ) { x.disabled = false; } );
-			b.textContent = 'Restore';
+			b.textContent = __( 'Restore', 'livepull' );
 			window.alert( err.message );
 		} );
 	} );

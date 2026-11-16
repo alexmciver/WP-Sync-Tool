@@ -53,7 +53,7 @@ jobs:
           # Release notes: this version's CHANGELOG section, else the commit message.
           awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > notes.txt
           [ -s notes.txt ] || git log -1 --format=%B > notes.txt
-          gh release create "v${{ steps.v.outputs.version }}" dist/livepull.zip dist/livepull-wordpress-org.zip dist/wp-sync.zip \
+          gh release create "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 \
             --title "LivePull ${{ steps.v.outputs.version }}" \
             --notes-file notes.txt
 
@@ -66,7 +66,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > notes.txt
-          gh release upload "v${{ steps.v.outputs.version }}" dist/livepull.zip dist/livepull-wordpress-org.zip --clobber
+          gh release upload "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 --clobber
           [ -s notes.txt ] && gh release edit "v${{ steps.v.outputs.version }}" --notes-file notes.txt
 
       - name: Check for WordPress.org credentials

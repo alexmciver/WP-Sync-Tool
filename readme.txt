@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -83,10 +83,20 @@ Not yet. WPML and comments aren't supported yet either.
 
 == Changelog ==
 
+= 1.1.0 =
+* Security: requests to live never send the key anywhere else after a redirect, and redirected media downloads are checked at every step.
+* Security: pulls refuse settings, post types and taxonomies that aren't meant to be pulled.
+* Copy everything stages downloaded files until the database has switched over, so cancelling leaves the site unchanged.
+* Backups restore all or nothing, and pull backups no longer contain users.
+* Ready for translation.
+
 = 1.0.0 =
 * First release.
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+Security and reliability improvements. Update both your live and local sites.
 
 = 1.0.0 =
 First release. Install it on both your live and local sites.
