@@ -2,15 +2,34 @@
 ( function () {
 	'use strict';
 	var cfg = window.WPSYNC || {};
+	window.WPSYNC_LOADED = true;
 	var $ = function ( sel, root ) { return ( root || document ).querySelector( sel ); };
 	var $$ = function ( sel, root ) { return Array.prototype.slice.call( ( root || document ).querySelectorAll( sel ) ); };
 
-	function post( action, data ) {
+	var controller = null;
+	function post( action, data, timeoutMs ) {
 		var fd = new FormData();
 		fd.append( 'action', action );
 		fd.append( '_ajax_nonce', cfg.nonce );
 		Object.keys( data || {} ).forEach( function ( k ) { fd.append( k, data[ k ] ); } );
-		return fetch( cfg.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin' } )
+		var ctrl = window.AbortController ? new AbortController() : null;
+		var timer = null;
+		if ( ctrl && timeoutMs ) {
+			controller = ctrl;
+			timer = setTimeout( function () { ctrl.abort( 'timeout' ); }, timeoutMs );
+		}
+		return fetch( cfg.ajaxUrl, { method: 'POST', body: fd, credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined } )
+			.catch( function ( e ) {
+				if ( ctrl && ctrl.signal.aborted ) {
+					var err = new Error( ctrl.signal.reason === 'timeout'
+						? 'This site stopped responding while pulling (no reply for ' + Math.round( timeoutMs / 1000 ) + ' seconds). Progress up to the last finished batch is saved. Try again; if it keeps happening, the live site may be slow or blocking requests.'
+						: 'Cancelled.' );
+					err.code = ctrl.signal.reason === 'timeout' ? 'timeout' : 'cancelled';
+					throw err;
+				}
+				throw new Error( 'Network error: ' + e.message );
+			} )
+			.then( function ( r ) { clearTimeout( timer ); return r; } )
 			.then( function ( r ) {
 				return r.text().then( function ( t ) {
 					try { return JSON.parse( t ); } catch ( e ) {
@@ -20,7 +39,9 @@
 			} )
 			.then( function ( j ) {
 				if ( ! j || ! j.success ) {
-					throw new Error( ( j && j.data && j.data.message ) || 'Request failed.' );
+					var err = new Error( ( j && j.data && j.data.message ) || 'Request failed.' );
+					err.code = j && j.data && j.data.code;
+					throw err;
 				}
 				return j.data;
 			} );
@@ -149,6 +170,13 @@
 		}
 	}
 
+	var lastActivity = '', lastCounts = '', startedAt = 0, ticker = null;
+	function paintProgress() {
+		var secs = Math.round( ( Date.now() - startedAt ) / 1000 );
+		var t = secs < 60 ? secs + 's' : Math.floor( secs / 60 ) + 'm ' + ( secs % 60 ) + 's';
+		$( '.wpsync-progress-text', progress ).textContent = lastActivity + ( lastCounts ? ' · ' + lastCounts : '' ) + ' · ' + t;
+	}
+
 	function setProgress( d ) {
 		var bar = $( '.wpsync-bar span', progress );
 		var text = $( '.wpsync-progress-text', progress );
@@ -162,7 +190,9 @@
 		bar.style.width = pct + '%';
 		if ( d ) {
 			var r = d.report;
-			text.textContent = ( d.done ? 'Finished. ' : 'Working… ' ) + 'Batch ' + d.page + ' · ' + r.created.length + ' new · ' + r.updated.length + ' updated · ' + r.deleted.length + ' deleted · ' + n( r.conflicts.length, 'conflict', 'conflicts' );
+			lastActivity = ( d.done ? 'Finished' : ( d.activity || 'Working…' ) );
+			lastCounts = r.created.length + ' new · ' + r.updated.length + ' updated · ' + r.deleted.length + ' deleted · ' + n( r.conflicts.length, 'conflict', 'conflicts' ) + ( r.files ? ' · ' + n( r.files, 'file', 'files' ) + ' downloaded' : '' );
+			paintProgress();
 		}
 	}
 
@@ -175,7 +205,13 @@
 		notices.innerHTML = '';
 		progress.hidden = false;
 		$( '.wpsync-bar span', progress ).style.width = '2%';
-		$( '.wpsync-progress-text', progress ).textContent = dry ? 'Checking what would change…' : 'Backing up and starting…';
+		startedAt = Date.now();
+		lastActivity = dry ? 'Checking what would change…' : 'Connecting to live…';
+		lastCounts = '';
+		paintProgress();
+		ticker = setInterval( paintProgress, 1000 );
+		btnCancel.hidden = false;
+		cancelled = false;
 		window.onbeforeunload = function () { return 'A pull is running.'; };
 
 		var params = {
@@ -187,7 +223,8 @@
 		};
 
 		function next( p ) {
-			return post( 'wpsync_pull', p ).then( function ( d ) {
+			if ( cancelled ) { var e = new Error( 'Cancelled.' ); e.code = 'cancelled'; return Promise.reject( e ); }
+			return post( 'wpsync_pull', p, 180000 ).then( function ( d ) {
 				( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
 				setProgress( d );
 				if ( ! d.done ) { return next( { step: 'next' } ); }
@@ -204,14 +241,40 @@
 				loadLocal();
 			}
 		} ).catch( function ( e ) {
-			notice( result, 'error', e.message );
+			if ( e.code === 'cancelled' ) {
+				notice( result, 'warning', 'Stopped. Everything up to the last finished batch is kept; press Pull again to continue.' );
+			} else if ( e.code === 'wpsync_locked' ) {
+				var n2 = notice( result, 'warning', e.message + ' If you know nothing is running (for example the page was closed mid-pull), unlock it: ' );
+				var ub = el( 'button', 'button', 'Unlock and pull again' );
+				ub.type = 'button';
+				ub.addEventListener( 'click', function () {
+					post( 'wpsync_cancel' ).then( function () { result.innerHTML = ''; run( dry ); } );
+				} );
+				n2.querySelector( 'p' ).appendChild( ub );
+			} else {
+				notice( result, 'error', e.message );
+				if ( e.code === 'timeout' ) { post( 'wpsync_cancel' ).catch( function () {} ); }
+			}
 		} ).then( function () {
 			running = false;
+			clearInterval( ticker );
+			btnCancel.hidden = true;
 			window.onbeforeunload = null;
 			setTimeout( function () { progress.hidden = true; }, 800 );
 			loadStatus();
 		} );
 	}
+
+	var cancelled = false;
+	var btnCancel = $( '#wpsync-cancel' );
+	btnCancel.addEventListener( 'click', function () {
+		cancelled = true;
+		btnCancel.hidden = true;
+		lastActivity = 'Stopping after the current step…';
+		paintProgress();
+		if ( controller ) { controller.abort( 'cancel' ); }
+		post( 'wpsync_cancel' ).catch( function () {} );
+	} );
 
 	btnPreview.addEventListener( 'click', function () { run( true ); } );
 	btnPull.addEventListener( 'click', function () { run( false ); } );

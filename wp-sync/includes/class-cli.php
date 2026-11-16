@@ -124,16 +124,18 @@ class WPSync_CLI {
 		foreach ( $state['notices'] as $n ) {
 			WP_CLI::log( WP_CLI::colorize( '%B' . $n . '%n' ) );
 		}
+		$shown_backup = false;
 		do {
-			$state = WPSync_Puller::step( $state );
+			$state = WPSync_Puller::step( $state, 5 );
 			if ( is_wp_error( $state ) ) {
 				WP_CLI::error( $state->get_error_message() );
 			}
-			if ( 1 === $state['page'] && $state['backup_file'] ) {
+			if ( ! $shown_backup && $state['backup_file'] ) {
 				WP_CLI::log( 'Backup: ' . $state['backup_file'] );
+				$shown_backup = true;
 			}
 			$r = $state['report'];
-			WP_CLI::log( sprintf( 'Batch %d: %d new, %d updated, %d deleted, %d conflicts so far…', $state['page'], count( $r['created'] ), count( $r['updated'] ), count( $r['deleted'] ), count( $r['conflicts'] ) ) );
+			WP_CLI::log( sprintf( '%s · %d new, %d updated, %d deleted, %d conflicts, %d files', $state['activity'], count( $r['created'] ), count( $r['updated'] ), count( $r['deleted'] ), count( $r['conflicts'] ), $r['files'] ) );
 		} while ( ! $state['done'] );
 
 		$this->print_report( $state['report'], $state['opts']['dry_run'] );

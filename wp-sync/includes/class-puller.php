@@ -21,11 +21,12 @@ final class WPSync_Puller {
 	}
 
 	public static function merge_report( array $into, array $r ) {
+		unset( $r['downloads'] );
 		foreach ( array( 'created', 'updated', 'deleted', 'skipped', 'errors' ) as $k ) {
 			$into[ $k ] = array_merge( $into[ $k ], $r[ $k ] );
 		}
 		$into['conflicts'] = array_merge( $into['conflicts'], $r['conflicts'] );
-		$into['files']    += $r['files'];
+		$into['files']    += isset( $r['files'] ) ? $r['files'] : 0;
 		return $into;
 	}
 
@@ -52,7 +53,7 @@ final class WPSync_Puller {
 			$code = (int) ( is_array( $remote->get_error_data() ) && isset( $remote->get_error_data()['status'] ) ? $remote->get_error_data()['status'] : 0 );
 			if ( in_array( $code, array( 401, 403 ), true ) && 'Invalid sync key.' !== $remote->get_error_message() ) {
 				$hint = ' A firewall or security plugin on live may be blocking the request (allow ?rest_route=/wpsync/v1/).';
-			} elseif ( 404 === $code ) {
+			} elseif ( 404 === $code && false === strpos( $remote->get_error_message(), 'mu-plugins' ) ) {
 				$hint = ' Is WP Sync installed in wp-content/mu-plugins on the live site?';
 			}
 			return new WP_Error( 'wpsync_unreachable', 'Could not reach live: ' . $remote->get_error_message() . $hint );
@@ -127,58 +128,139 @@ final class WPSync_Puller {
 		);
 	}
 
-	/** Process one page of changes. @return array|WP_Error updated state */
-	public static function step( array $state ) {
+	/** Seconds of work per browser request before reporting progress. */
+	const BUDGET = 8;
+
+	/**
+	 * Do up to ~15 seconds of work: fetch a page of changes, import it a few items at a
+	 * time, then download its media files. The cursor only moves once a page is fully
+	 * done (items + files), so an interrupted pull simply repeats that page next time.
+	 *
+	 * @param float $budget Seconds to work before returning (0 = until finished, for WP-CLI).
+	 * @return array|WP_Error updated state
+	 */
+	public static function step( array $state, $budget = self::BUDGET ) {
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 300 ); // phpcs:ignore
 		}
-		$dry    = (bool) $state['opts']['dry_run'];
-		$params = array( 'after' => $state['after'], 'limit' => WPSync_Config::page_size() );
-		if ( 'scan' === $state['mode'] ) {
-			$params['since'] = $state['since'];
-		}
-		$res = self::client()->get( $state['mode'], $params );
-		if ( is_wp_error( $res ) ) {
-			self::unlock( $state );
-			return new WP_Error( 'wpsync_fetch', 'Fetching changes from live failed: ' . $res->get_error_message() . ( $state['page'] ? ' Progress so far is saved; run the pull again to continue.' : '' ) );
-		}
+		$t0  = microtime( true );
+		$dry = (bool) $state['opts']['dry_run'];
+		$state += array( 'pending' => array(), 'downloads' => array(), 'dl_total' => 0, 'dl_done' => 0, 'page_open' => false, 'page_last_id' => 0, 'page_has_more' => false, 'activity' => '' );
+		$out = function () use ( $t0, $budget ) {
+			return $budget > 0 && ( microtime( true ) - $t0 ) >= $budget;
+		};
 
-		if ( ! empty( $res['items'] ) ) {
-			if ( $state['backup'] ) {
-				$file = WPSync_Backup::create();
-				if ( is_wp_error( $file ) ) {
-					self::unlock( $state );
-					return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+		while ( ! $state['done'] ) {
+			// 1. Media files for the current page.
+			if ( $state['downloads'] ) {
+				$client = self::client();
+				while ( $state['downloads'] && ! $out() ) {
+					$f    = array_shift( $state['downloads'] );
+					$dest = WPSync_Importer::safe_dest( $f['path'] );
+					$state['activity'] = sprintf( 'Downloading media %d of %d', $state['dl_done'] + 1, $state['dl_total'] );
+					if ( $dest && ( ! file_exists( $dest ) || $state['opts']['redownload'] ) ) {
+						$res = $client->download( $f['url'], $dest );
+						if ( is_wp_error( $res ) ) {
+							$state['report']['errors'][] = 'Media download failed: ' . $res->get_error_message();
+						} else {
+							$state['report']['files']++;
+						}
+					}
+					$state['dl_done']++;
 				}
-				$state['backup']      = false;
-				$state['backup_file'] = $file;
+				if ( $out() ) {
+					break;
+				}
+				continue;
 			}
-			$importer = new WPSync_Importer( self::client(), $state['remote'], array(
-				'dry_run'     => $dry,
-				'theirs'      => (bool) $state['opts']['theirs'],
-				'redownload'  => (bool) $state['opts']['redownload'],
-				'url_replace' => (bool) $state['opts']['url_replace'],
-			) );
-			$report          = $importer->run( $res['items'] );
-			$state['report'] = self::merge_report( $state['report'], $report );
-			if ( ! $dry ) {
-				self::store_conflicts( $report );
+
+			// 2. Import the current page a few items at a time.
+			if ( $state['pending'] ) {
+				$chunk    = array_splice( $state['pending'], 0, 10 );
+				$importer = new WPSync_Importer( self::client(), $state['remote'], array(
+					'dry_run'     => $dry,
+					'theirs'      => (bool) $state['opts']['theirs'],
+					'redownload'  => (bool) $state['opts']['redownload'],
+					'url_replace' => (bool) $state['opts']['url_replace'],
+					'defer_files' => true,
+				) );
+				$report          = $importer->run( $chunk );
+				$queued          = $report['downloads'];
+				$state['report'] = self::merge_report( $state['report'], $report );
+				$state['downloads'] = array_merge( $state['downloads'], $queued );
+				$state['dl_total'] += count( $queued );
+				$state['activity']  = sprintf( 'Importing batch %d: %d left in this batch', $state['page'], count( $state['pending'] ) );
+				if ( ! $dry ) {
+					self::store_conflicts( $report );
+				}
+				if ( $out() ) {
+					break;
+				}
+				continue;
+			}
+
+			// 3. Current page fully done: move the cursor.
+			if ( $state['page_open'] ) {
+				$state['page_open'] = false;
+				$state['after']     = $state['page_last_id'];
+				if ( ! $dry && 'changes' === $state['mode'] ) {
+					self::save_cursor( $state['after'], $state['remote'] );
+				}
+				if ( ! $state['page_has_more'] ) {
+					$state['done'] = true;
+					break;
+				}
+				if ( $out() ) {
+					break;
+				}
+			}
+
+			// 4. Fetch the next page.
+			$state['activity'] = 'Asking live for changes…';
+			$params = array( 'after' => $state['after'], 'limit' => WPSync_Config::page_size() );
+			if ( 'scan' === $state['mode'] ) {
+				$params['since'] = $state['since'];
+			}
+			$res = self::client()->get( $state['mode'], $params );
+			if ( is_wp_error( $res ) ) {
+				self::unlock( $state );
+				return new WP_Error( 'wpsync_fetch', 'Fetching changes from live failed: ' . $res->get_error_message() . ( $state['page'] ? ' Progress so far is saved; pull again to continue.' : '' ) );
+			}
+			$state['page']++;
+			$state['page_open']     = true;
+			$state['page_last_id']  = (int) $res['last_id'];
+			$state['page_has_more'] = ! empty( $res['has_more'] );
+			if ( ! empty( $res['items'] ) ) {
+				if ( $state['backup'] ) {
+					$state['activity'] = 'Backing up the local database…';
+					$file = WPSync_Backup::create();
+					if ( is_wp_error( $file ) ) {
+						self::unlock( $state );
+						return new WP_Error( 'wpsync_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+					}
+					$state['backup']      = false;
+					$state['backup_file'] = $file;
+				}
+				$state['pending'] = WPSync_Importer::sort_items( $res['items'] );
+			}
+			if ( $out() ) {
+				break;
 			}
 		}
 
-		$state['after'] = (int) $res['last_id'];
-		$state['page']++;
-		if ( ! $dry && 'changes' === $state['mode'] ) {
-			self::save_cursor( $state['after'], $state['remote'] );
-		}
 		if ( ! $dry ) {
 			set_transient( self::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		}
-		if ( empty( $res['has_more'] ) ) {
-			$state['done'] = true;
+		if ( $state['done'] ) {
+			$state['activity'] = 'Finished';
 			self::finish( $state );
 		}
 		return $state;
+	}
+
+	/** Stop a pull (admin Cancel / Unlock). Progress up to the last finished batch is kept. */
+	public static function cancel() {
+		delete_transient( self::LOCK );
 	}
 
 	private static function finish( array $state ) {

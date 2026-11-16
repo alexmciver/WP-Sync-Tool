@@ -15,13 +15,14 @@ final class WPSync_Admin {
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
 		add_action( 'admin_post_wpsync_save', array( __CLASS__, 'save' ) );
-		foreach ( array( 'status', 'pull', 'resolve', 'local_changes' ) as $a ) {
+		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel' ) as $a ) {
 			add_action( 'wp_ajax_wpsync_' . $a, array( __CLASS__, 'ajax_' . $a ) );
 		}
 	}
 
 	public static function menu() {
 		$hook = add_management_page( 'WP Sync', 'WP Sync', self::CAP, self::SLUG, array( __CLASS__, 'render' ) );
+		add_action( 'admin_print_scripts-' . $hook, array( __CLASS__, 'noscript_note' ) );
 		add_action( 'admin_print_styles-' . $hook, array( __CLASS__, 'assets' ) );
 	}
 
@@ -30,7 +31,8 @@ final class WPSync_Admin {
 	}
 
 	public static function assets() {
-		$base = WPMU_PLUGIN_URL . '/wp-sync/assets/';
+		// Works whether installed as a normal plugin or a must-use plugin.
+		$base = plugins_url( 'wp-sync/assets/', WPSYNC_FILE );
 		wp_enqueue_style( 'wpsync-admin', $base . 'admin.css', array(), WPSync_Config::VERSION );
 		wp_enqueue_script( 'wpsync-admin', $base . 'admin.js', array(), WPSync_Config::VERSION, true );
 		wp_localize_script( 'wpsync-admin', 'WPSYNC', array(
@@ -38,6 +40,11 @@ final class WPSync_Admin {
 			'nonce'      => wp_create_nonce( 'wpsync' ),
 			'configured' => (bool) WPSync_Config::remote(),
 		) );
+	}
+
+	/** If the script fails to load, say so instead of spinning forever. */
+	public static function noscript_note() {
+		echo '<script>window.addEventListener("load",function(){if(!window.WPSYNC_LOADED){var s=document.getElementById("wpsync-status");if(s&&s.classList.contains("is-loading")){s.className="wpsync-status is-error";s.textContent="The WP Sync script did not load (check the plugin files are complete, and that no optimisation plugin is blocking wp-sync/assets/admin.js).";}}});</script>';
 	}
 
 	/* ================================================================ Save */
@@ -163,6 +170,7 @@ final class WPSync_Admin {
 			<div class="wpsync-actions">
 				<button type="button" class="button button-hero" id="wpsync-preview" disabled>Preview changes</button>
 				<button type="button" class="button button-primary button-hero" id="wpsync-pull" disabled>Pull changes</button>
+				<button type="button" class="button-link wpsync-danger" id="wpsync-cancel" hidden>Cancel</button>
 			</div>
 
 			<details class="wpsync-advanced">
@@ -318,6 +326,7 @@ final class WPSync_Admin {
 		$step = isset( $_POST['step'] ) ? sanitize_key( wp_unslash( $_POST['step'] ) ) : '';
 
 		if ( 'start' === $step ) {
+			delete_transient( $tkey );
 			$state = WPSync_Puller::start( array(
 				'dry_run'    => ! empty( $_POST['dry'] ),
 				'theirs'     => ! empty( $_POST['theirs'] ),
@@ -325,7 +334,7 @@ final class WPSync_Admin {
 				'since'      => isset( $_POST['since'] ) ? sanitize_text_field( wp_unslash( $_POST['since'] ) ) : '',
 			) );
 			if ( is_wp_error( $state ) ) {
-				wp_send_json_error( array( 'message' => $state->get_error_message() ) );
+				wp_send_json_error( array( 'message' => $state->get_error_message(), 'code' => $state->get_error_code() ) );
 			}
 		} else {
 			$state = get_transient( $tkey );
@@ -365,9 +374,19 @@ final class WPSync_Admin {
 				'errors'    => $r['errors'],
 				'files'     => $r['files'],
 			),
+			'activity'  => $state['activity'],
+			'dl_total'  => (int) $state['dl_total'],
+			'dl_done'   => (int) $state['dl_done'],
 			'conflicts_html' => $state['done'] ? self::capture( array( __CLASS__, 'conflicts_table' ), WPSync_Puller::conflicts() ) : '',
 			'conflict_count' => count( WPSync_Puller::conflicts() ),
 		) );
+	}
+
+	public static function ajax_cancel() {
+		self::guard();
+		delete_transient( 'wpsync_run_' . get_current_user_id() );
+		WPSync_Puller::cancel();
+		wp_send_json_success( array( 'message' => 'Stopped. Everything up to the last finished batch is kept; pull again to continue.' ) );
 	}
 
 	public static function ajax_resolve() {
