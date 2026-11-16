@@ -15,7 +15,7 @@ final class WPSync_Admin {
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
 		add_action( 'admin_post_wpsync_save', array( __CLASS__, 'save' ) );
-		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel' ) as $a ) {
+		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore' ) as $a ) {
 			add_action( 'wp_ajax_wpsync_' . $a, array( __CLASS__, 'ajax_' . $a ) );
 		}
 	}
@@ -93,9 +93,10 @@ final class WPSync_Admin {
 			'connected'    => 'Connection saved. Checking live…',
 			'disconnected' => 'Disconnected from live.',
 			'key'          => 'New key generated. Copy it into your local site.',
+			'restored'     => 'Backup restored. You may need to log in again if you were logged out.',
 		);
 		if ( ! isset( $msg ) ) {
-			$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : '';
+			$msg = isset( $_GET['msg'] ) ? sanitize_key( wp_unslash( $_GET['msg'] ) ) : ( isset( $_GET['restored'] ) ? 'restored' : '' );
 		}
 		$update = WPSync_Updater::available();
 		?>
@@ -226,6 +227,27 @@ final class WPSync_Admin {
 			<h2>Conflicts <span class="count" id="wpsync-conflict-count">(<?php echo (int) count( $conflicts ); ?>)</span></h2>
 			<p class="description">Items changed on live <em>and</em> here since they were last pulled. They were left as they are here until you choose.</p>
 			<div id="wpsync-conflicts"><?php self::conflicts_table( $conflicts ); ?></div>
+		</div>
+
+		<?php $backups = WPSync_Backup::all(); ?>
+		<div class="wpsync-card">
+			<details id="wpsync-backups" <?php echo isset( $_GET['restored'] ) ? 'open' : ''; ?>>
+				<summary><h2>Undo a pull</h2></summary>
+				<p class="description">A backup is taken before every pull. Restoring one puts this site's posts, pages, media library, categories, users and settings back exactly as they were at that moment (media files that were downloaded stay in the uploads folder).</p>
+				<?php if ( ! $backups ) : ?>
+					<p class="wpsync-empty">No backups yet.</p>
+				<?php else : ?>
+				<table class="widefat striped wpsync-table"><thead><tr><th>Backup taken (before the pull)</th><th>Size</th><th></th></tr></thead><tbody>
+				<?php foreach ( array_slice( $backups, 0, 10 ) as $b ) : ?>
+					<tr>
+						<td><?php echo esc_html( wp_date( 'D j M Y, H:i:s', $b['time'] ) ); ?> <span class="description">(<?php echo esc_html( human_time_diff( $b['time'] ) ); ?> ago)</span></td>
+						<td><?php echo esc_html( size_format( $b['size'] ) ); ?></td>
+						<td class="wpsync-row-actions"><button type="button" class="button wpsync-restore" data-file="<?php echo esc_attr( $b['name'] ); ?>">Restore</button></td>
+					</tr>
+				<?php endforeach; ?>
+				</tbody></table>
+				<?php endif; ?>
+			</details>
 		</div>
 
 		<div class="wpsync-card">
@@ -415,6 +437,30 @@ final class WPSync_Admin {
 		delete_transient( 'wpsync_run_' . get_current_user_id() );
 		WPSync_Puller::cancel();
 		wp_send_json_success( array( 'message' => 'Stopped. Everything up to the last finished batch is kept; pull again to continue.' ) );
+	}
+
+	public static function ajax_restore() {
+		self::guard();
+		$file = WPSync_Backup::find( isset( $_POST['file'] ) ? sanitize_file_name( wp_unslash( $_POST['file'] ) ) : '' );
+		if ( ! $file ) {
+			wp_send_json_error( array( 'message' => 'Backup not found.' ) );
+		}
+		if ( get_transient( WPSync_Puller::LOCK ) ) {
+			wp_send_json_error( array( 'message' => 'A pull is running. Cancel it first.' ) );
+		}
+		// Safety net: back up the current state first, so a restore can itself be undone.
+		$now = WPSync_Backup::create();
+		if ( is_wp_error( $now ) ) {
+			wp_send_json_error( array( 'message' => 'Could not back up the current state first: ' . $now->get_error_message() ) );
+		}
+		$res = WPSync_Backup::restore( $file );
+		if ( is_wp_error( $res ) ) {
+			wp_send_json_error( array( 'message' => $res->get_error_message() ) );
+		}
+		wp_send_json_success( array(
+			'message'  => 'Restored. This site is back to how it was before that pull.',
+			'redirect' => self::url( array( 'restored' => 1 ) ),
+		) );
 	}
 
 	public static function ajax_resolve() {

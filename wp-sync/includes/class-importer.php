@@ -213,7 +213,17 @@ final class WPSync_Importer {
 		if ( isset( $this->handled[ $key ] ) ) {
 			return $this->handled[ $key ];
 		}
-		$local    = isset( $this->maps[ $type ][ $sid ] ) ? $this->maps[ $type ][ $sid ] : 0;
+		$local   = isset( $this->maps[ $type ][ $sid ] ) ? $this->maps[ $type ][ $sid ] : 0;
+		$matched = false;
+		if ( ! $local && empty( $item['deleted'] ) ) {
+			// Not linked yet: is it the same page/file/term as one already here (sites built or
+			// migrated separately, so their IDs differ)? Link it instead of creating a duplicate.
+			$local = $this->find_match( $item );
+			if ( $local ) {
+				$matched = true;
+				$this->relink( $type, $local, $sid );
+			}
+		}
 		$forced   = $this->opts['theirs'] || in_array( $key, (array) $this->opts['force'], true );
 		$conflict = isset( $this->local_changed[ $key ] ) && ! $forced;
 
@@ -254,7 +264,7 @@ final class WPSync_Importer {
 		}
 
 		if ( $this->opts['dry_run'] ) {
-			$this->report[ $local ? 'updated' : 'created' ][] = $this->label( $item, $local );
+			$this->report[ $local ? 'updated' : 'created' ][] = $this->label( $item, $local ) . ( $matched ? ' – matched to the existing local copy' : '' );
 			$this->handled[ $key ] = $local;
 			return $local;
 		}
@@ -265,9 +275,106 @@ final class WPSync_Importer {
 			$this->maps[ $type ][ $sid ] = $id;
 			$this->ref_queue[]           = array( $item, $id );
 			$this->mark_synced( $type, $sid, $id );
-			$this->report[ $local ? 'updated' : 'created' ][] = $this->label( $item, $id );
+			$this->report[ $local ? 'updated' : 'created' ][] = $this->label( $item, $id ) . ( $matched ? ' – matched to the existing local copy' : '' );
 		}
 		return $id;
+	}
+
+	/**
+	 * Find a local object that is the same thing as this live one even though their sync
+	 * IDs differ: same post type + slug, same media file, same term slug, or (for posts
+	 * without a slug) same title + date. Only objects that have never been linked to live
+	 * are considered, so two genuinely different live items can't both claim one local item.
+	 *
+	 * @return int local ID or 0
+	 */
+	private function find_match( array $item ) {
+		global $wpdb;
+		// Local IDs already claimed in this run, for this object type only (post #2 and term #2 are unrelated).
+		$taken = array();
+		foreach ( $this->handled as $k => $id ) {
+			if ( $id && 0 === strpos( $k, $item['type'] . ':' ) ) {
+				$taken[] = (int) $id;
+			}
+		}
+		$cands = array();
+
+		if ( 'term' === $item['type'] ) {
+			$t = $item['term'];
+			if ( taxonomy_exists( $t['taxonomy'] ) ) {
+				$existing = get_term_by( 'slug', $t['slug'], $t['taxonomy'] );
+				if ( $existing ) {
+					$cands[] = (int) $existing->term_id;
+				}
+			}
+		} else {
+			$p = $item['post'];
+			if ( 'attachment' === $p['post_type'] && ! empty( $item['meta']['_wp_attached_file'][0] ) ) {
+				$cands = $wpdb->get_col( $wpdb->prepare(
+					"SELECT p.ID FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_wp_attached_file'
+					 WHERE p.post_type = 'attachment' AND m.meta_value = %s ORDER BY p.ID LIMIT 5",
+					$item['meta']['_wp_attached_file'][0]
+				) );
+			} elseif ( '' !== (string) $p['post_name'] ) {
+				$cands = $wpdb->get_col( $wpdb->prepare(
+					"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_name = %s AND post_status NOT IN ('auto-draft','inherit') ORDER BY ID LIMIT 5",
+					$p['post_type'],
+					$p['post_name']
+				) );
+			} elseif ( '' !== (string) $p['post_title'] ) {
+				$cands = $wpdb->get_col( $wpdb->prepare(
+					"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_title = %s AND post_date = %s AND post_status <> 'auto-draft' ORDER BY ID LIMIT 5",
+					$p['post_type'],
+					$p['post_title'],
+					$p['post_date']
+				) );
+			}
+		}
+
+		$eligible = array();
+		foreach ( array_map( 'intval', $cands ) as $id ) {
+			if ( in_array( $id, $taken, true ) ) {
+				continue;
+			}
+			$csid = 'term' === $item['type'] ? WPSync_Ids::for_term( $id ) : WPSync_Ids::for_post( $id );
+			// Already linked to a (different) live item by an earlier pull? Then it isn't this one.
+			$linked = (int) $wpdb->get_var( $wpdb->prepare(
+				'SELECT COUNT(*) FROM ' . WPSync_Config::table() . " WHERE source = 'sync' AND object_type = %s AND sync_id = %s",
+				$item['type'],
+				$csid
+			) );
+			if ( ! $linked ) {
+				$eligible[] = $id;
+			}
+		}
+		// Ambiguous (e.g. two child pages called "team" under different parents): don't guess.
+		return 1 === count( $eligible ) ? $eligible[0] : 0;
+	}
+
+	/** Point a local object at a live sync ID, carrying its local-change history across. */
+	private function relink( $type, $local, $new_sid ) {
+		global $wpdb;
+		$old_sid = 'term' === $type ? WPSync_Ids::for_term( $local ) : WPSync_Ids::for_post( $local );
+		if ( ! $old_sid || $old_sid === $new_sid ) {
+			return;
+		}
+		$old_key = $type . ':' . $old_sid;
+		$new_key = $type . ':' . $new_sid;
+		if ( isset( $this->local_changed[ $old_key ] ) ) {
+			$this->local_changed[ $new_key ] = $this->local_changed[ $old_key ];
+			unset( $this->local_changed[ $old_key ] );
+		}
+		unset( $this->maps[ $type ][ $old_sid ] );
+		$this->maps[ $type ][ $new_sid ] = $local;
+		if ( $this->opts['dry_run'] ) {
+			return;
+		}
+		if ( 'term' === $type ) {
+			update_term_meta( $local, WPSync_Config::META_KEY, $new_sid );
+		} else {
+			update_post_meta( $local, WPSync_Config::META_KEY, $new_sid );
+		}
+		$wpdb->update( WPSync_Config::table(), array( 'sync_id' => $new_sid ), array( 'object_type' => $type, 'sync_id' => $old_sid ) );
 	}
 
 	private function conflict( $key, $item, $local, $reason ) {
