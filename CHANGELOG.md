@@ -2,6 +2,11 @@
 
 All notable changes to WP Sync. Versions follow [semantic versioning](https://semver.org/); while in 0.x, minor versions may add features and change behaviour.
 
+## 0.6.1 – tested with real Divi
+- Tested end to end with Divi 4.27.9 installed: Divi pages, images, galleries, buttons and full-width layouts display correctly on local after a pull; Theme Builder, Divi Library and Theme Options come across with *Copy everything*.
+- **Fix:** viewing a Divi page on local could still make WP Sync think you'd edited it (Divi saves extra cache data the first time a page is shown), so the next change from live was held back as a conflict.
+- Test suite can install a theme on both test sites (`WPSYNC_TEST_THEME=Divi.zip`).
+
 ## 0.6.0 – tested with popular page builders
 - New end-to-end test suite (`tests/run.sh`): builds a real live and local site with different IDs and table prefixes and checks 162 things across Gutenberg, Elementor, Beaver Builder, SiteOrigin, Spectra, Kadence Blocks, GenerateBlocks, Divi 4/5 content, WooCommerce (simple, variable, attributes), ACF, Yoast, Polylang, menus, conflicts and *Copy everything*.
 - **Fix:** a pull could stop part-way on sites using Beaver Builder (and other plugins that save PHP objects in custom fields). Custom fields are now copied byte-for-byte, with URLs rewritten safely.

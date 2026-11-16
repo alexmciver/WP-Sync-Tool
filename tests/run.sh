@@ -12,6 +12,7 @@
 #   WPSYNC_TEST_DIR      work dir (default /tmp/wpsync-test)
 #   WPSYNC_TEST_PLUGINS  folder of plugin zips to install (default /tmp/plugins)
 #   WPSYNC_TEST_CORE     an unpacked WordPress core to copy (default: wp core download)
+#   WPSYNC_TEST_THEME    a theme zip to install and activate on both sites (e.g. Divi.zip)
 #   DB_USER / DB_PASS / DB_HOST  (default root / "" / 127.0.0.1)
 # Usage: tests/run.sh [scenario-name ...]     e.g. tests/run.sh elementor divi
 set -uo pipefail
@@ -56,6 +57,11 @@ PHP
 		[ "$pl" = "hello" ] || [ "$pl" = "akismet" ] && continue
 		wp plugin activate "$pl" --path="$dir" --quiet 2>&1 | sed "s#^#  [setup $title] #" || true
 	done
+	if [ -n "${WPSYNC_TEST_THEME:-}" ]; then
+		unzip -qo "$WPSYNC_TEST_THEME" -d "$dir/wp-content/themes/"
+		local th; th=$(unzip -Z1 "$WPSYNC_TEST_THEME" | head -1 | cut -d/ -f1)
+		wp theme activate "$th" --path="$dir" --quiet 2>&1 | sed "s#^#  [setup $title] #" || true
+	fi
 	wp plugin is-active wp-sync --path="$dir" || { echo "WP Sync failed to activate on $title"; exit 1; }
 	# Builders that ship their own "getting started" redirects/notices: keep them quiet.
 	wp option update elementor_onboarded 1 --path="$dir" --quiet 2>/dev/null || true
