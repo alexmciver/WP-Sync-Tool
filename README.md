@@ -154,13 +154,13 @@ Every release is checked by an end-to-end test suite that builds a real live sit
 
 | Area | Tested with |
 |---|---|
-| Editors / page builders | Gutenberg core blocks, Elementor, Beaver Builder, SiteOrigin Page Builder, Spectra, Kadence Blocks, GenerateBlocks, Divi 4 and Divi 5 content* |
+| Editors / page builders | Gutenberg core blocks, Elementor, Beaver Builder, SiteOrigin Page Builder, Spectra, Kadence Blocks, GenerateBlocks, Divi 4 (with Divi 4.27.9 installed) and Divi 5 content* |
 | Shop | WooCommerce simple and variable products, galleries, upsells, attributes |
 | Fields / SEO / languages | ACF (image, relationship, taxonomy fields), Yoast SEO, Polylang |
 | Site structure | Menus, menu locations, homepage and posts page, site title, logo, icon |
 | Safety | Conflicts (edited on both sides), deletions, undo, *Copy everything* |
 
-\* Divi is a paid theme, so the suite checks Divi's saved content arrives intact and re-pointed but doesn't render it. Bricks, Oxygen, WPBakery and Brizy data is handled the same way but not yet covered by tests.
+\* Divi is a paid theme, so it isn't in the repo. Without it the suite checks Divi's saved content arrives intact; add `WPSYNC_TEST_THEME=/path/to/Divi.zip` to also check pages display, Theme Builder and Theme Options. Divi 5 pages are checked for content only. Bricks, Oxygen, WPBakery and Brizy data is handled the same way but not yet covered by tests.
 
 To run it yourself (needs PHP, MySQL/MariaDB and WP-CLI; put plugin zips in a folder):
 

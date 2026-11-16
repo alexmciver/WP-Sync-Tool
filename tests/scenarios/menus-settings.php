@@ -11,7 +11,7 @@ if ( 'create' === $phase ) {
 	$i1 = wp_update_nav_menu_item( $menu, 0, array( 'menu-item-object-id' => $svc, 'menu-item-object' => 'page', 'menu-item-type' => 'post_type', 'menu-item-status' => 'publish', 'menu-item-title' => 'Our services' ) );
 	$i2 = wp_update_nav_menu_item( $menu, 0, array( 'menu-item-object-id' => $cat['term_id'], 'menu-item-object' => 'category', 'menu-item-type' => 'taxonomy', 'menu-item-status' => 'publish', 'menu-item-parent-id' => $i1 ) );
 	wp_update_nav_menu_item( $menu, 0, array( 'menu-item-type' => 'custom', 'menu-item-url' => home_url( '/contact/#form' ), 'menu-item-title' => 'Contact form', 'menu-item-status' => 'publish' ) );
-	set_theme_mod( 'nav_menu_locations', array( 'primary' => $menu ) );
+	set_theme_mod( 'nav_menu_locations', array( 'primary' => $menu, 'primary-menu' => $menu ) ); // 'primary-menu' is Divi's header menu
 	update_option( 'show_on_front', 'page' );
 	update_option( 'page_on_front', $home );
 	update_option( 'blogname', 'Live site title' );

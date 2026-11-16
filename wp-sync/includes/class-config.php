@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class WPSync_Config {
 
-	const VERSION  = '0.6.0';
+	const VERSION  = '0.6.1';
 	const META_KEY = '_wpsync_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → WP Sync. */
@@ -219,7 +219,7 @@ final class WPSync_Config {
 			'/^_uag_(page_assets|css_file_name|js_file_name)/', '/^_uagb_previous_block_counts$/', // Spectra
 			'/^_kad_post_(css|assets)/', '/^_kadence_blocks_(css|assets)/', // Kadence
 			'/^_generateblocks_(dynamic_css|css)/', '/^generateblocks_css/', // GenerateBlocks
-			'/^_et_dynamic_cached_/', '/^_et_builder_module_features_cache/', '/^et_enqueued_post_fonts$/', '/^_et_pb_ab_/', // Divi
+			'/^_et_dynamic_cached_/', '/^_et_builder_dynamic_assets/', '/^_et_pb_.*_cache/', '/^_et_builder_module_features_cache/', '/^et_enqueued_post_fonts$/', '/^_et_pb_ab_/', // Divi
 			'/^_fl_builder_.*_cache/',                         // Beaver Builder
 			'/^_brizy_.*(cache|compiled)/',                    // Brizy
 			'/^_siteorigin_panels_(css|cache)/',               // SiteOrigin
