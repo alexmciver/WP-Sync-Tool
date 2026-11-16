@@ -677,7 +677,7 @@ final class WPSync_Full {
 		// This database is now a fresh copy of live: pulls continue from this exact point.
 		WPSync_Config::mark_as_clone();
 		delete_option( 'wpsync_clone_detected' );
-		update_option( 'wpsync_fingerprint', md5( untrailingslashit( home_url() ) ), true );
+		update_option( 'wpsync_fingerprint', WPSync_Config::fingerprint(), true );
 		update_option( 'wpsync_remote_home', $state['remote']['home'], false );
 		update_option( 'wpsync_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
 		update_option( 'wpsync_full_synced', gmdate( 'Y-m-d H:i:s' ), false );

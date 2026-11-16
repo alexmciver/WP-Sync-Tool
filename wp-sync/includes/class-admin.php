@@ -372,10 +372,39 @@ final class WPSync_Admin {
 				Allow <strong>Copy everything</strong> from this site</label><br>
 				<span class="description">Lets a site with the key download this site's whole database and uploads (including users and settings). Switch off if you only want content pulls.</span>
 			</form>
+			<?php self::recent_changes(); ?>
 			<p class="description">Changes recorded on this site: <?php echo (int) $count; ?>. Pulling never writes anything to this site; the key only allows reading content.</p>
 			<?php if ( $collapsed ) : ?></details><?php endif; ?>
 		</div>
 		<?php
+	}
+
+	/** The last changes this site recorded: lets you check an edit was picked up. */
+	private static function recent_changes() {
+		global $wpdb;
+		$rows = $wpdb->get_results( 'SELECT object_type, sync_id, object_id, action, created_at FROM ' . WPSync_Config::table() . " WHERE source = 'local' ORDER BY id DESC LIMIT 15" );
+		echo '<details class="wpsync-recent"><summary><strong>Recent changes recorded on this site</strong></summary>';
+		if ( ! $rows ) {
+			echo '<p class="wpsync-empty">None yet. Edit something and it will appear here.</p></details>';
+			return;
+		}
+		echo '<table class="widefat striped wpsync-table"><thead><tr><th>When</th><th>Item</th><th>Change</th></tr></thead><tbody>';
+		foreach ( $rows as $r ) {
+			if ( 'option' === $r->object_type ) {
+				$n    = WPSync_Importer::option_name( $r->sync_id );
+				$item = 0 === strpos( $n, 'theme_mods_' ) ? 'Setting: menu locations / logo' : 'Setting: ' . $n;
+			} elseif ( 'term' === $r->object_type ) {
+				$t    = get_term( (int) $r->object_id );
+				$item = ( $t && ! is_wp_error( $t ) ) ? $t->taxonomy . ' "' . $t->name . '"' : 'term #' . $r->object_id;
+			} else {
+				$p    = get_post( (int) $r->object_id );
+				$item = $p ? ( 'nav_menu_item' === $p->post_type ? 'menu item' : $p->post_type ) . ' "' . ( '' !== $p->post_title ? $p->post_title : '#' . $p->ID ) . '"' : 'item #' . $r->object_id . ' (deleted)';
+			}
+			printf( '<tr><td>%s</td><td>%s</td><td>%s</td></tr>', esc_html( human_time_diff( strtotime( $r->created_at . ' UTC' ) ) . ' ago' ), esc_html( $item ), esc_html( 'delete' === $r->action ? 'deleted' : 'added/edited' ) );
+		}
+		echo '</tbody></table>';
+		echo '<p class="description">Not seeing an edit here? Then WP Sync doesn\'t track that kind of change (for example Divi Theme Builder, theme/Customizer options, widgets, or plugin settings) – use <em>Copy everything from live</em> on your local site to bring those across.</p>';
+		echo '</details>';
 	}
 
 	/* ================================================================ AJAX */
