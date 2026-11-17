@@ -28,7 +28,7 @@ wp_clear_scheduled_hook( 'livepull_daily' );
 
 // Backups: wherever LivePull kept them.
 $livepull_site = sanitize_file_name( basename( untrailingslashit( ABSPATH ) ) ) . '-' . substr( md5( ABSPATH . '|' . DB_NAME . '|' . $wpdb->prefix ), 0, 10 );
-$livepull_dirs = array_merge( array( WP_CONTENT_DIR . '/livepull-backups', dirname( untrailingslashit( ABSPATH ) ) . '/livepull-backups/' . $livepull_site ), (array) glob( WP_CONTENT_DIR . '/livepull-backups-*', GLOB_ONLYDIR ), (array) glob( WP_CONTENT_DIR . '/livepull-stage-*', GLOB_ONLYDIR ) );
+$livepull_dirs = array_merge( array( WP_CONTENT_DIR . '/livepull-backups', dirname( untrailingslashit( ABSPATH ) ) . '/livepull-backups/' . $livepull_site ), (array) glob( WP_CONTENT_DIR . '/livepull-backups-*', GLOB_ONLYDIR ) );
 if ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR ) {
 	$livepull_dirs[] = untrailingslashit( LIVEPULL_BACKUP_DIR );
 }
@@ -43,4 +43,17 @@ foreach ( array_unique( $livepull_dirs ) as $livepull_dir ) {
 		@unlink( $livepull_dir . '/' . $livepull_f ); // phpcs:ignore
 	}
 	@rmdir( $livepull_dir ); // phpcs:ignore
+}
+
+// Copy everything's temporary folders (files waiting to be moved, or kept after a failed move).
+foreach ( array_merge( (array) glob( WP_CONTENT_DIR . '/livepull-stage-*', GLOB_ONLYDIR ), (array) glob( WP_CONTENT_DIR . '/livepull-unplaced-*', GLOB_ONLYDIR ) ) as $livepull_dir ) {
+	$livepull_it = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $livepull_dir, FilesystemIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+	foreach ( $livepull_it as $livepull_f ) {
+		$livepull_f->isDir() ? @rmdir( $livepull_f->getPathname() ) : @unlink( $livepull_f->getPathname() ); // phpcs:ignore
+	}
+	@rmdir( $livepull_dir ); // phpcs:ignore
+}
+// Live's temporary uploads listings.
+foreach ( (array) glob( trailingslashit( get_temp_dir() ) . 'livepull-files-*' ) as $livepull_f ) {
+	@unlink( $livepull_f ); // phpcs:ignore
 }

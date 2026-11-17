@@ -286,12 +286,22 @@ final class LivePull_Full {
 		}
 		// The listing is written to a temporary file on the first page and read page by page
 		// after that, so even a huge media library never has to fit in memory.
-		$index = trailingslashit( get_temp_dir() ) . 'livepull-files-' . md5( $base . '|' . LivePull_Config::secret() ) . '.txt';
-		if ( 0 === $offset || ! is_readable( $index ) ) {
+		// Each copy has its own listing (named by the token it sends), so two copies at once
+		// never share one, and a listing is never rebuilt part-way (that could change its order).
+		$token = preg_replace( '/[^A-Za-z0-9]/', '', (string) $r['token'] );
+		$index = trailingslashit( get_temp_dir() ) . 'livepull-files-' . md5( $base . '|' . LivePull_Config::secret() . '|' . $token ) . '.txt';
+		if ( 0 === $offset ) {
+			foreach ( (array) glob( trailingslashit( get_temp_dir() ) . 'livepull-files-*' ) as $old ) {
+				if ( filemtime( $old ) < time() - DAY_IN_SECONDS ) {
+					wp_delete_file( $old ); // Listings from copies that never finished.
+				}
+			}
 			$total = self::write_file_index( $base, $index );
 			if ( is_wp_error( $total ) ) {
 				return $total;
 			}
+		} elseif ( ! is_readable( $index ) ) {
+			return new WP_Error( 'livepull_listing_gone', 'The list of uploads on live has expired. Start the listing again.', array( 'status' => 410 ) );
 		}
 		// Plain line-by-line reading (SplFileObject::seek() returns the wrong line before PHP 8.0.1).
 		$fh    = fopen( $index, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
@@ -880,7 +890,11 @@ final class LivePull_Full {
 				if ( file_exists( $dest ) && filesize( $dest ) === (int) $f['size'] ) {
 					continue; // Already here.
 				}
-				$res = $client->download( $f['url'], self::staged_path( $state, $dest ) );
+				$staged = self::staged_path( $state, $dest );
+				if ( file_exists( $staged ) && filesize( $staged ) === (int) $f['size'] ) {
+					continue; // Already downloaded by this copy.
+				}
+				$res = $client->download( $f['url'], $staged );
 				if ( is_wp_error( $res ) ) {
 					if ( count( $state['errors'] ) < 50 ) {
 						$state['errors'][] = 'Could not download ' . $f['path'] . ': ' . $res->get_error_message();
@@ -896,7 +910,19 @@ final class LivePull_Full {
 				return $state;
 			}
 			$state['activity'] = 'Listing live\'s uploads folder…';
-			$res = $client->get( 'files', array( 'offset' => $state['files_offset'], 'limit' => 2000 ) );
+			if ( empty( $state['files_token'] ) ) {
+				$state['files_token'] = wp_generate_password( 20, false );
+			}
+			$res = $client->get( 'files', array( 'offset' => $state['files_offset'], 'limit' => 2000, 'token' => $state['files_token'] ) );
+			if ( is_wp_error( $res ) && 'livepull_listing_gone' === $res->get_error_code() && empty( $state['files_relisted'] ) ) {
+				// Live lost its list part-way: list again from the start (once). Files already
+				// downloaded are skipped, so nothing is copied twice.
+				$state['files_relisted'] = true;
+				$state['files_token']    = wp_generate_password( 20, false );
+				$state['files_offset']   = 0;
+				$state['files_done']     = 0;
+				continue;
+			}
 			if ( is_wp_error( $res ) ) {
 				$state['errors'][]   = 'Could not list live\'s uploads: ' . $res->get_error_message() . ' (database copied; media skipped)';
 				$state['files_offset'] = -1;

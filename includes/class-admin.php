@@ -389,7 +389,7 @@ final class LivePull_Admin {
 				</form>
 				<?php endif; ?>
 				<?php $latest = LivePull_Backup::latest(); ?>
-				<p class="description"><?php self::kses_e( sprintf( /* translators: 1: backups folder, 2: latest backup note (may be empty) */ __( 'Backups are saved before every pull in <code>%1$s</code>%2$s. Restore with <code>wp db import</code> or phpMyAdmin.', 'livepull' ), esc_html( LivePull_Backup::dir() ), $latest ? ' (' . sprintf( /* translators: %s: file name */ __( 'latest: <code>%s</code>', 'livepull' ), esc_html( basename( $latest ) ) ) . ')' : '' ) ); ?></p>
+				<p class="description"><?php self::kses_e( sprintf( /* translators: 1: backups folder, 2: latest backup note (may be empty) */ __( 'Backups are saved before every pull in <code>%1$s</code>%2$s. Restore them with the Restore buttons above, or with <code>wp db import</code> or phpMyAdmin (for a file ending in <code>.sql.php</code>, delete its first line, <code>&lt;?php exit; ?&gt;</code>, before importing it with those tools).', 'livepull' ), esc_html( LivePull_Backup::dir() ), $latest ? ' (' . sprintf( /* translators: %s: file name */ __( 'latest: <code>%s</code>', 'livepull' ), esc_html( basename( $latest ) ) ) . ')' : '' ) ); ?></p>
 				<?php if ( LivePull_Backup::in_web_root() ) : ?>
 					<p class="description"><?php self::kses_e( __( '<strong>Backups are inside the website\'s own folder</strong> because the folder above it can\'t be written to. They are saved as files that can\'t be downloaded over the web, with unguessable names. To keep them completely out of the website, add <code>define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/outside/the/website\' );</code> to wp-config.php.', 'livepull' ) ); ?></p>
 				<?php endif; ?>
