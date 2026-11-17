@@ -293,12 +293,19 @@ final class LivePull_Full {
 				return $total;
 			}
 		}
-		$fh = new SplFileObject( $index, 'r' );
-		$total = (int) trim( (string) $fh->fgets() ); // First line: how many files.
-		$fh->seek( $offset + 1 );
+		// Plain line-by-line reading (SplFileObject::seek() returns the wrong line before PHP 8.0.1).
+		$fh    = fopen( $index, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+		$total = (int) trim( (string) fgets( $fh ) ); // First line: how many files.
+		for ( $i = 0; $i < $offset && false !== fgets( $fh ); $i++ ) {
+			// Skip to this page.
+		}
 		$files = array();
-		while ( count( $files ) < $limit && ! $fh->eof() ) {
-			$rel = rtrim( (string) $fh->fgets(), "\n" );
+		while ( count( $files ) < $limit ) {
+			$line = fgets( $fh );
+			if ( false === $line ) {
+				break;
+			}
+			$rel = rtrim( $line, "\n" );
 			if ( '' === $rel ) {
 				continue;
 			}
@@ -308,9 +315,9 @@ final class LivePull_Full {
 				'url'  => $uploads['baseurl'] . '/' . implode( '/', array_map( 'rawurlencode', explode( '/', $rel ) ) ),
 			);
 		}
+		fclose( $fh ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 		$next = $offset + count( $files );
-		$done = $next >= $total;
-		$fh   = null;
+		$done = $next >= $total || ! $files; // An empty page always ends the listing.
 		if ( $done ) {
 			wp_delete_file( $index );
 		}
@@ -897,7 +904,9 @@ final class LivePull_Full {
 			}
 			$state['queue']        = $res['files'];
 			$state['files_total']  = isset( $res['total'] ) ? (int) $res['total'] : $state['files_total'];
-			$state['files_offset'] = ! empty( $res['done'] ) ? -1 : (int) $res['next'];
+			// Stop on "done", an empty page, or a page that doesn't move forward: never ask twice.
+			$stuck                 = empty( $res['files'] ) || (int) $res['next'] <= (int) $state['files_offset'];
+			$state['files_offset'] = ( ! empty( $res['done'] ) || $stuck ) ? -1 : (int) $res['next'];
 		}
 		return $state;
 	}
