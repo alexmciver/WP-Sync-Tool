@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -92,6 +92,16 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.2.1 =
+* Comment conflicts: Compare, "Use live version" and held-back comments now work.
+* Commenters' IP addresses and anti-spam data never leave live, and live only sends comments to sites that pull them.
+* Only one pull or copy runs at a time, and Unlock can't start a second pull alongside a scheduled one.
+* Updates must contain the version they were offered as.
+* Scheduled pulls come back after Copy everything or a restore; failures are emailed once.
+* Backups before full copies are kept separately; no backup when the disk is nearly full.
+* ACF options pages start switched off. Clearer labels for forms and comments.
+* Clearer wording: LivePull never changes your live content or settings.
+
 = 1.2.0 =
 * A simpler screen: one *Check for changes* button, a plain status line, and tabs for Pull, Conflicts, History, Copy everything, Backups and Settings. A short guide on first use, and a much simpler screen on the live site.
 * Choose what to pull: every change has a tick box. Unticked items are held back and offered again next time.
@@ -115,6 +125,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.2.1 =
+Fixes comment conflicts, keeps commenter IP addresses on live and makes sure only one pull runs at a time. Update both sites.
 
 = 1.2.0 =
 A simpler screen, choose what to pull, history, scheduled pulls and a connection check. Update both your live and local sites.

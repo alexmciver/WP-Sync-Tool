@@ -2,7 +2,7 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 1.2.1
 Fixes from the 1.2.0 review.
 - **Comments:** Compare, "Use live version" and held-back comments now work (live's single-item route accepted posts, terms and settings only). Replies whose parent isn't local yet keep their threading.
 - **Privacy:** anti-spam data (Akismet, Antispam Bee) and any comment field holding the commenter's IP address or browser never leave live. Live only sends comments to sites that pull them. Commenters' names and emails do come across, and the setting now says so.
