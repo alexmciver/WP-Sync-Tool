@@ -2,6 +2,17 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.2.0
+- **A simpler screen.** One main *Check for changes* button, a plain status line ("Connected to … · last pulled … · 3 changes waiting"), and tabs: Pull, Conflicts, History, Copy everything, Backups, Settings. New sites ask "Which site is this?" once, the live site gets a short screen with just its connection code, and a local copy gets a three-step connect guide and a first-run explainer.
+- **Choose what to pull.** *Check for changes* lists every change with a tick box, grouped by what would happen and filterable by kind (Pages, Products, Settings…). Unticked items are held back and offered again in later checks; *Forget* drops them. Terminal: `wp livepull pull --exclude=… --include-held=…`, `wp livepull held`.
+- **Compare** a conflict with the live version side by side before choosing.
+- **History** of the last 30 pulls, scheduled pulls, full copies and restores, with what each brought across (`wp livepull history`).
+- **Scheduled pulls** hourly, twice daily, daily or weekly, with an email when something came across or needs a decision (`wp livepull schedule`).
+- **Fix it.** When live can't be reached, a connection check goes through each step (address, firewall or CDN, REST API, caching, key, versions) and says how to fix what failed (`wp livepull doctor`). *Report a problem* gathers your set-up and recent pulls (no keys) and opens a pre-filled GitHub issue (`wp livepull report`).
+- **Optional groups** under Settings (`wp livepull groups`): page-builder templates (Divi Library and Theme Builder, Elementor, Beaver Builder, Bricks), Contact Form 7 and WPForms forms, comments and product reviews (never spam, never commenters' IP addresses), and ACF options pages. Shortcodes and blocks that show a form or template point at the local copy. Elementor's site kit is never pulled.
+- Media kept on a CDN or S3 (WP Offload Media and similar) falls back to the normal uploads address.
+- **Signed updates.** Updates from GitHub must carry a signature from the release workflow as well as a matching checksum, so a swapped download can't install.
+
 ## 1.1.0
 - **Security:** requests to live no longer follow redirects blindly. The key is only ever sent to the live site itself, and every hop of a media download is checked, so a redirect can't reach an internal address.
 - **Security:** a pull only changes what pulls are meant to change. Settings outside the pulled list (site address, active plugins, user registration and similar) are refused, as are excluded post types and taxonomies, even if a compromised live site sends them.

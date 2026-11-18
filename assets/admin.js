@@ -84,7 +84,83 @@
 		} );
 	} );
 
+	$$( '.livepull-copy-text' ).forEach( function ( b ) {
+		b.addEventListener( 'click', function () {
+			var ta = b.closest( 'div' ).querySelector( 'textarea' );
+			( navigator.clipboard ? navigator.clipboard.writeText( ta.value ) : Promise.reject() ).catch( function () { ta.select(); document.execCommand( 'copy' ); } );
+			var was = b.textContent;
+			b.textContent = __( 'Copied', 'livepull' ); setTimeout( function () { b.textContent = was; }, 1500 );
+		} );
+	} );
+
 	if ( ! cfg.configured ) { return; }
+
+	/* ------------------------------------------------------------------ Tabs */
+
+	var tabs = $$( '.livepull-tabs [data-tab]' );
+	function showTab( id, push ) {
+		tabs.forEach( function ( t ) {
+			var on = t.getAttribute( 'data-tab' ) === id;
+			t.classList.toggle( 'nav-tab-active', on );
+			t.setAttribute( 'aria-selected', on ? 'true' : 'false' );
+		} );
+		$$( '.livepull-panel' ).forEach( function ( p ) { p.hidden = p.getAttribute( 'data-panel' ) !== id; } );
+		if ( push && window.history && window.history.replaceState ) {
+			var u = new URL( window.location.href );
+			u.searchParams.set( 'tab', id );
+			u.searchParams.delete( 'msg' );
+			u.searchParams.delete( 'restored' );
+			window.history.replaceState( null, '', u.toString() );
+		}
+		if ( id === 'conflicts' && ! localLoaded ) { loadLocal(); }
+	}
+	tabs.forEach( function ( t ) {
+		t.addEventListener( 'click', function ( e ) { e.preventDefault(); showTab( t.getAttribute( 'data-tab' ), true ); } );
+	} );
+
+	/* ------------------------------------------------------ Connection check */
+
+	function runHealth( box, btn ) {
+		box.hidden = false;
+		box.innerHTML = '<p><span class="spinner is-active"></span> ' + __( 'Checking each step of the connection…', 'livepull' ) + '</p>';
+		if ( btn ) { btn.disabled = true; }
+		return post( 'livepull_health', {}, 120000 ).then( function ( d ) {
+			box.innerHTML = d.html; // Built and escaped on the server.
+			var head = el( 'p', 'livepull-health-head', d.fails ? __( 'Found what\'s wrong. Follow the fix below, then press Check again.', 'livepull' ) : __( 'Everything checks out.', 'livepull' ) );
+			box.insertBefore( head, box.firstChild );
+		} ).catch( function ( e ) {
+			box.textContent = e.message;
+		} ).then( function () { if ( btn ) { btn.disabled = false; } } );
+	}
+	var fixBtn = $( '.livepull-fixit' );
+	if ( fixBtn ) {
+		fixBtn.addEventListener( 'click', function () {
+			runHealth( $( '#livepull-health' ), fixBtn ).then( function () {
+				var again = el( 'button', 'button', __( 'Check again', 'livepull' ) );
+				again.type = 'button';
+				again.addEventListener( 'click', function () { $( '#livepull-health' ).hidden = true; loadStatus(); } );
+				$( '#livepull-health' ).appendChild( again );
+			} );
+		} );
+	}
+	$$( '.livepull-run-health' ).forEach( function ( b ) {
+		b.addEventListener( 'click', function () { runHealth( b.closest( '.livepull-card' ).querySelector( '.livepull-health-here' ), b ); } );
+	} );
+
+	/* --------------------------------------------------------- Report a problem */
+
+	var reportBtn = $( '#livepull-report' );
+	if ( reportBtn ) {
+		reportBtn.addEventListener( 'click', function () {
+			reportBtn.disabled = true;
+			post( 'livepull_diagnostics', {}, 120000 ).then( function ( d ) {
+				var box = $( '#livepull-report-box' );
+				box.hidden = false;
+				$( 'textarea', box ).value = d.text;
+				$( '#livepull-issue' ).href = d.issue_url;
+			} ).catch( function ( e ) { window.alert( e.message ); } ).then( function () { reportBtn.disabled = false; } );
+		} );
+	}
 
 	var statusBox = $( '#livepull-status' );
 	var notices = $( '#livepull-notices' );
@@ -96,45 +172,53 @@
 
 	/* ---------------------------------------------------------------- Status */
 
-	function stat( label, value, cls ) {
-		var d = el( 'div', 'livepull-stat ' + ( cls || '' ) );
-		d.appendChild( el( 'span', 'livepull-stat-value', String( value ) ) );
-		d.appendChild( el( 'span', 'livepull-stat-label', label ) );
-		return d;
+	function setStatus( cls, text ) {
+		statusBox.className = 'livepull-statusline ' + cls;
+		$( '.livepull-status-text', statusBox ).textContent = text;
+		var paste = $( '.livepull-paste', statusBox );
+		if ( paste && cls !== 'is-error' ) { paste.parentNode.removeChild( paste ); }
+	}
+
+	function setConflictCount( c ) {
+		var b = $( '#livepull-conflict-count' );
+		if ( b ) { b.textContent = c; b.hidden = ! c; }
 	}
 
 	function loadStatus() {
-		statusBox.className = 'livepull-status is-loading';
-		statusBox.innerHTML = '<span class="spinner is-active"></span> ' + __( 'Checking live site…', 'livepull' );
+		setStatus( 'is-loading', __( 'Checking live…', 'livepull' ) );
+		if ( fixBtn ) { fixBtn.hidden = true; }
 		return post( 'livepull_status' ).then( function ( d ) {
-			statusBox.className = 'livepull-status';
-			statusBox.innerHTML = '';
-			statusBox.appendChild( stat( __( 'changes waiting on live', 'livepull' ), d.waiting, d.waiting ? 'is-hot' : '' ) );
-			statusBox.appendChild( stat( __( 'changed here since last pull', 'livepull' ), d.local ) );
-			statusBox.appendChild( stat( 'conflicts', d.conflicts, d.conflicts ? 'is-warn' : '' ) );
-			var ls = d.last_summary;
-			statusBox.appendChild( stat( __( 'last pull', 'livepull' ), d.last_pull ) );
-			var sum = $( '#livepull-last-summary' );
-			if ( sum ) {
-				sum.hidden = ! ls;
-				if ( ls ) {
-					sum.textContent = __( 'Last pull: ', 'livepull' ) + ls.created + __( ' new, ', 'livepull' ) + ls.updated + __( ' updated, ', 'livepull' ) + ls.deleted + __( ' deleted, ', 'livepull' ) + n( ls.conflicts, 'conflict', 'conflicts' ) + ( ls.files ? ', ' + n( ls.files, 'file', 'files' ) + __( ' downloaded', 'livepull' ) : '' ) + ( ls.errors ? ' – ' + n( ls.errors, 'error', 'errors' ) : '' ) + '.';
-				}
-			}
+			var parts = [ __( 'Connected to ', 'livepull' ) + d.host ];
+			parts.push( d.never ? __( 'never pulled', 'livepull' ) : __( 'last pulled ', 'livepull' ) + d.last_pull );
+			parts.push( d.waiting ? n( d.waiting, __( 'change waiting', 'livepull' ), __( 'changes waiting', 'livepull' ) ) : __( 'nothing new on live', 'livepull' ) );
+			if ( d.conflicts ) { parts.push( n( d.conflicts, __( 'conflict', 'livepull' ), __( 'conflicts', 'livepull' ) ) ); }
+			if ( d.held ) { parts.push( d.held + __( ' held back', 'livepull' ) ); }
+			setStatus( d.conflicts ? 'is-warn' : 'is-ok', parts.join( ' · ' ) );
+			setConflictCount( d.conflicts );
 			notices.innerHTML = '';
 			( d.notices || [] ).forEach( function ( m ) { notice( notices, 'info', m ); } );
 			var rec = $( '#livepull-recording' );
 			if ( rec && d.recording_since && d.never_pulled ) {
 				rec.hidden = false;
-				rec.textContent = __( 'Live has been recording changes since ', 'livepull' ) + d.recording_since + __( '. Content that differed before then needs "Pull all content from live" (More options).', 'livepull' );
+				rec.textContent = __( 'Live has been noting changes since ', 'livepull' ) + d.recording_since + __( '. If this copy is older than that, tick "Compare all content with live" under More options the first time.', 'livepull' );
 			}
 			btnPreview.disabled = btnPull.disabled = false;
 		} ).catch( function ( e ) {
-			statusBox.className = 'livepull-status is-error';
-			statusBox.textContent = e.message;
+			setStatus( 'is-error', e.message );
+			if ( fixBtn ) { fixBtn.hidden = false; }
 			if ( e.code === 'livepull_bad_key' || e.code === 'livepull_no_secret' ) {
-				var conn = $( '#livepull-connection' );
-				if ( conn ) { conn.open = true; var k = $( '#livepull-key' ); if ( k ) { k.focus(); } }
+				var paste = el( 'button', 'button button-small button-primary livepull-paste', __( 'Paste a new code', 'livepull' ) );
+				paste.type = 'button';
+				paste.addEventListener( 'click', function () {
+					showTab( 'settings', true );
+					var conn = $( '#livepull-connection' );
+					if ( conn ) { conn.open = true; }
+					var code = $( '#livepull-code' ) || $( '#livepull-key' );
+					if ( code ) { code.focus(); }
+				} );
+				var old = $( '.livepull-paste', statusBox );
+				if ( old ) { old.parentNode.removeChild( old ); }
+				statusBox.appendChild( paste );
 			}
 			btnPreview.disabled = btnPull.disabled = true;
 		} );
@@ -160,7 +244,14 @@
 		result.innerHTML = '';
 		var total = r.created.length + r.updated.length + r.deleted.length;
 		var head = el( 'div', 'livepull-summary ' + ( r.errors.length ? 'is-error' : 'is-ok' ) );
-		var verb = d.dry ? __( 'Preview: ', 'livepull' ) : __( 'Done: ', 'livepull' );
+		var verb = d.dry ? __( 'Found on live: ', 'livepull' ) : __( 'Done: ', 'livepull' );
+		var heldNow = ( d.preview || [] ).filter( function ( i ) { return i.held; } ).length;
+		if ( d.dry && ! total && ! r.conflicts.length && ! heldNow ) {
+			head.appendChild( el( 'strong', '', __( 'You\'re up to date. ', 'livepull' ) ) );
+			head.appendChild( document.createTextNode( __( 'Nothing has changed on live since the last pull.', 'livepull' ) ) );
+			result.appendChild( head );
+			return;
+		}
 		head.appendChild( el( 'strong', '', verb + ( total || r.conflicts.length ? '' : __( 'nothing to pull. ', 'livepull' ) ) ) );
 		head.appendChild( document.createTextNode(
 			r.created.length + __( ' new, ', 'livepull' ) + r.updated.length + __( ' updated, ', 'livepull' ) + r.deleted.length + __( ' deleted, ', 'livepull' ) +
@@ -209,7 +300,7 @@
 			[ 'create', __( 'New on live', 'livepull' ) ],
 			[ 'update', __( 'Changed on live', 'livepull' ) ],
 			[ 'delete', __( 'Deleted on live', 'livepull' ) ],
-			[ 'conflict', __( 'Changed in both places (decide under Conflicts after pulling)', 'livepull' ) ]
+			[ 'conflict', __( 'Changed here and on live: your version is kept, and you can decide under Conflicts', 'livepull' ) ]
 		];
 		var groups = {};
 		items.forEach( function ( i ) { groups[ i.group ] = ( groups[ i.group ] || 0 ) + 1; } );
@@ -233,11 +324,20 @@
 		} );
 		wrap.appendChild( filters );
 
-		function section( title, list, held ) {
+		function section( title, list, held, fixed ) {
 			if ( ! list.length ) { return; }
-			var det = el( 'details', 'livepull-list' + ( held ? ' is-warn' : '' ) );
+			var det = el( 'details', 'livepull-list' + ( held || fixed ? ' is-warn' : '' ) );
 			det.open = list.length <= 30;
 			var sum = el( 'summary' );
+			if ( fixed ) {
+				sum.textContent = title + ' (' + list.length + ')';
+				det.appendChild( sum );
+				var ul0 = el( 'ul' );
+				list.forEach( function ( i ) { ul0.appendChild( el( 'li', '', i.label ) ); } );
+				det.appendChild( ul0 );
+				wrap.appendChild( det );
+				return;
+			}
 			var all = el( 'input' );
 			all.type = 'checkbox';
 			all.checked = ! held;
@@ -271,13 +371,13 @@
 			wrap.appendChild( det );
 		}
 		actions.forEach( function ( a ) {
-			section( a[ 1 ], items.filter( function ( i ) { return i.action === a[ 0 ] && ! i.held; } ), false );
+			section( a[ 1 ], items.filter( function ( i ) { return i.action === a[ 0 ] && ! i.held; } ), false, a[ 0 ] === 'conflict' );
 		} );
 		var held = items.filter( function ( i ) { return i.held && i.action !== 'conflict'; } );
 		section( __( 'Held back from earlier pulls (tick to pull them now)', 'livepull' ), held, true );
 
 		var bar = el( 'p', 'livepull-picker-actions' );
-		var go = el( 'button', 'button button-primary' );
+		var go = el( 'button', 'button button-primary button-hero' );
 		go.type = 'button';
 		bar.appendChild( go );
 		if ( held.length ) {
@@ -379,7 +479,14 @@
 			renderReport( d );
 			if ( ! d.dry ) {
 				$( '#livepull-conflicts' ).innerHTML = d.conflicts_html;
-				$( '#livepull-conflict-count' ).textContent = '(' + d.conflict_count + ')';
+				setConflictCount( d.conflict_count );
+				if ( d.history_html ) { $( '#livepull-history' ).innerHTML = d.history_html; }
+				if ( d.conflict_count ) {
+					var go2 = el( 'button', 'button', __( 'Sort out the conflicts', 'livepull' ) );
+					go2.type = 'button';
+					go2.addEventListener( 'click', function () { showTab( 'conflicts', true ); } );
+					var pc = el( 'p' ); pc.appendChild( go2 ); result.appendChild( pc );
+				}
 				$( '#livepull-since' ).value = '';
 				$( '#livepull-all' ).checked = false;
 				loadLocal();
@@ -463,7 +570,7 @@
 		post( 'livepull_resolve', { key: row.getAttribute( 'data-key' ), mode: take ? 'take' : 'keep' } ).then( function ( d ) {
 			cell.textContent = d.message;
 			row.classList.add( 'is-resolved' );
-			$( '#livepull-conflict-count' ).textContent = '(' + d.conflict_count + ')';
+			setConflictCount( d.conflict_count );
 			setTimeout( function () { row.parentNode && row.parentNode.removeChild( row ); }, 2500 );
 			loadStatus();
 			loadLocal();
@@ -493,7 +600,7 @@
 		} );
 		fullBtn.addEventListener( 'click', function () {
 			if ( running ) { return; }
-			if ( ! window.confirm( __( 'Replace this site\'s WHOLE database with a copy of live?\n\nEverything here (content, settings, users) becomes what\'s on live. Your current database is backed up first and can be restored from "Undo a pull or copy".\n\nAfterwards, log in with your live site\'s username and password.', 'livepull' ) ) ) { return; }
+			if ( ! window.confirm( __( 'Replace this site\'s WHOLE database with a copy of live?\n\nEverything here (content, settings, users) becomes what\'s on live. Your current database is backed up first and can be restored from the Backups tab.\n\nAfterwards, log in with your live site\'s username and password.', 'livepull' ) ) ) { return; }
 			running = true; fullStop = false;
 			fullBtn.disabled = btnPull.disabled = btnPreview.disabled = true;
 			fullCancel.hidden = false; fullProg.hidden = false; fullRes.innerHTML = '';
@@ -538,7 +645,7 @@
 		var b = e.target.closest( '.livepull-restore' );
 		if ( ! b ) { return; }
 		var when = b.closest( 'tr' ).querySelector( 'td' ).textContent.trim();
-		if ( ! window.confirm( __( 'Restore the backup from ', 'livepull' ) + when + __( '?\n\nEverything pulled or edited on this site since then will be undone. (Your current state is backed up first, so you can undo this too.)', 'livepull' ) ) ) { return; }
+		if ( ! window.confirm( __( 'Go back to the backup from ', 'livepull' ) + when + __( '?\n\nEverything pulled or edited on this site since then will be undone. (Your current state is backed up first, so you can undo this too.)', 'livepull' ) ) ) { return; }
 		$$( '.livepull-restore' ).forEach( function ( x ) { x.disabled = true; } );
 		b.textContent = __( 'Restoring…', 'livepull' );
 		post( 'livepull_restore', { file: b.getAttribute( 'data-file' ) }, 600000 ).then( function ( d ) {
@@ -560,10 +667,8 @@
 		post( 'livepull_local_changes' ).then( function ( d ) { box.innerHTML = d.html; localLoaded = true; } )
 			.catch( function ( e ) { box.textContent = e.message; } );
 	}
-	var det = $( '#livepull-local-details' );
-	if ( det ) {
-		det.addEventListener( 'toggle', function () { if ( det.open && ! localLoaded ) { loadLocal(); } } );
-	}
+	var startTab = tabs.filter( function ( t ) { return t.classList.contains( 'nav-tab-active' ); } )[ 0 ];
+	if ( startTab && startTab.getAttribute( 'data-tab' ) === 'conflicts' ) { loadLocal(); }
 
 	loadStatus();
 } )();

@@ -80,7 +80,7 @@ final class LivePull_Puller {
 			if ( 'Invalid sync key.' === $remote->get_error_message() ) {
 				list( $k, $from ) = LivePull_Config::remote_secret_source();
 				return new WP_Error( 'livepull_bad_key', sprintf(
-					'Live rejected the key. This site is using the key ending %s, from %s. On live, open Tools → LivePull, click Show, and check it ends the same. If not, copy it and paste it under Connection here.',
+					'Live rejected the key. This site is using the key ending %s, from %s. On live, open Tools → LivePull, click Show, and check it ends the same. If not, copy the connection code there and paste it into Settings → Change the live site or key here.',
 					LivePull_Config::key_hint( $k ),
 					$from
 				) );
@@ -116,7 +116,7 @@ final class LivePull_Puller {
 			return new WP_Error( 'livepull_remote_changed', "Last pull was from {$stored}, but the live URL is now {$remote['home']}. Use catch-up mode (pick a date) to start fresh." );
 		}
 		if ( ! get_option( 'livepull_full_synced' ) && ! get_option( 'livepull_clone_floor' ) && ! get_option( 'livepull_last_pull' ) ) {
-			$notices[] = 'First time? A normal pull only brings changes made on live since LivePull was installed there. To bring across everything that already differs, tick "Pull all content from live" under More options.';
+			$notices[] = 'First time? A normal pull only brings changes made on live since LivePull was installed there. To bring across everything that already differs, tick "Compare all content with live" under More options.';
 		}
 		return $remote;
 	}

@@ -37,7 +37,12 @@ if ( 'verify' === $phase ) {
 	t_eq( (int) get_option( 'page_on_front' ), t_local( $s['home'] ), 'homepage setting points at local page' );
 	t_eq( get_option( 'blogname' ), 'Live site title', 'site title' );
 	$r = t_fetch( home_url( '/' ) );
-	t_ok( 200 === $r['code'] && false !== strpos( $r['body'], 'Our services' ), 'front page renders with the menu' );
+	if ( false !== strpos( $r['body'], 'DIVI-TB-HEADER' ) ) {
+		// Divi Theme Builder header pulled (templates on): it replaces the theme header, as on live.
+		t_ok( 200 === $r['code'], 'front page renders with the Theme Builder header, as on live' );
+	} else {
+		t_ok( 200 === $r['code'] && false !== strpos( $r['body'], 'Our services' ), 'front page renders with the menu' );
+	}
 }
 
 if ( 'change' === $phase ) {

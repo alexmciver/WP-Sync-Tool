@@ -54,22 +54,46 @@ class LivePull_History {
 	/** One line, e.g. "3 new, 5 updated, 1 deleted, 2 conflicts". */
 	public static function summary( array $e ) {
 		$parts = array();
-		foreach ( array(
-			'created'   => __( '%d new', 'livepull' ),
-			'updated'   => __( '%d updated', 'livepull' ),
-			'deleted'   => __( '%d deleted', 'livepull' ),
-			'conflicts' => __( '%d conflicts', 'livepull' ),
-			'held'      => __( '%d held back', 'livepull' ),
-			'skipped'   => __( '%d skipped', 'livepull' ),
-			'errors'    => __( '%d errors', 'livepull' ),
-		) as $k => $fmt ) {
-			if ( ! empty( $e[ $k . '_count' ] ) ) {
-				$parts[] = sprintf( $fmt, (int) $e[ $k . '_count' ] );
-			}
+		$c = function ( $k ) use ( $e ) {
+			return isset( $e[ $k . '_count' ] ) ? (int) $e[ $k . '_count' ] : 0;
+		};
+		if ( $c( 'created' ) ) {
+			/* translators: %d: number of new items */
+			$parts[] = sprintf( __( '%d new', 'livepull' ), $c( 'created' ) );
+		}
+		if ( $c( 'updated' ) ) {
+			/* translators: %d: number of updated items */
+			$parts[] = sprintf( __( '%d updated', 'livepull' ), $c( 'updated' ) );
+		}
+		if ( $c( 'deleted' ) ) {
+			/* translators: %d: number of deleted items */
+			$parts[] = sprintf( __( '%d deleted', 'livepull' ), $c( 'deleted' ) );
+		}
+		if ( $c( 'conflicts' ) ) {
+			/* translators: %d: number of conflicts */
+			$parts[] = sprintf( _n( '%d conflict', '%d conflicts', $c( 'conflicts' ), 'livepull' ), $c( 'conflicts' ) );
+		}
+		if ( $c( 'held' ) ) {
+			/* translators: %d: number of items held back */
+			$parts[] = sprintf( __( '%d held back', 'livepull' ), $c( 'held' ) );
+		}
+		if ( $c( 'skipped' ) ) {
+			/* translators: %d: number of skipped items */
+			$parts[] = sprintf( __( '%d skipped', 'livepull' ), $c( 'skipped' ) );
+		}
+		if ( $c( 'errors' ) ) {
+			/* translators: %d: number of errors */
+			$parts[] = sprintf( _n( '%d error', '%d errors', $c( 'errors' ), 'livepull' ), $c( 'errors' ) );
 		}
 		if ( ! empty( $e['files'] ) ) {
 			/* translators: %d: number of files */
-			$parts[] = sprintf( __( '%d media files', 'livepull' ), (int) $e['files'] );
+			$parts[] = sprintf( _n( '%d media file', '%d media files', (int) $e['files'], 'livepull' ), (int) $e['files'] );
+		}
+		if ( ! $parts && isset( $e['kind'] ) && 'copy' === $e['kind'] ) {
+			return __( 'This site became a copy of live', 'livepull' );
+		}
+		if ( ! $parts && isset( $e['kind'] ) && 'restore' === $e['kind'] ) {
+			return __( 'Put back as it was', 'livepull' );
 		}
 		return $parts ? implode( ', ', $parts ) : __( 'nothing changed', 'livepull' );
 	}

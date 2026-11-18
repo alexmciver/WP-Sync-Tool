@@ -409,7 +409,7 @@ final class LivePull_Full {
 
 		// Settings that belong to THIS site and must survive the copy.
 		$keep = array();
-		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style', 'livepull_history', 'livepull_schedule', 'livepull_groups' ) as $o ) {
+		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style', 'livepull_history', 'livepull_schedule', 'livepull_groups', 'livepull_role' ) as $o ) {
 			$v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $o ) );
 			if ( null !== $v ) {
 				$keep[ $o ] = $v;

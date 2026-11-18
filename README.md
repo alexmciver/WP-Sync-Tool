@@ -4,8 +4,11 @@
 
 You're building or fixing something on a local or staging copy. Meanwhile the client keeps adding posts, pages, products and images on the live site. Normally you either work on stale content or copy the whole database down again and lose your changes. LivePull gives you a third option: bring across just what changed on live, and leave anything you've changed locally alone.
 
-- **Pull changes** – new and edited posts, pages, custom post types, media, categories/tags, custom fields, menus and key site settings.
-- **Never overwrites your work** – if something changed on live *and* locally, it's left alone and flagged as a conflict for you to decide.
+- **Pull changes** – new and edited posts, pages, custom post types, media, categories/tags, custom fields, menus and key site settings. Optionally templates, forms, comments and ACF options pages.
+- **You choose what comes across** – *Check for changes* lists every change with a tick box; unticked items are held back for later.
+- **Never overwrites your work** – if something changed on live *and* locally, it's left alone and flagged as a conflict. Compare both versions side by side, then decide.
+- **History and scheduled pulls** – see what every pull brought across, and pull automatically with an email summary.
+- **Fix it** – if the connection fails, a step-by-step check says what's wrong and how to fix it.
 - **Copy everything from live** – a full database + uploads copy when you want to start fresh, with URLs rewritten safely.
 - **Undo** – a backup is taken before every pull and copy; restore from the dashboard.
 - **Works from WordPress or the terminal** – *Tools → LivePull*, or `wp livepull` (WP-CLI).
@@ -34,37 +37,47 @@ Update both sites so they stay on the same version.
 
 ## Set up (2 minutes)
 
-1. **On the live site:** *Tools → LivePull* → **Generate key**, then **Copy** the **Connection code**.
-2. **On your local site:** *Tools → LivePull* → paste it into **Connection code** → **Save and connect**.
+1. **On the live site:** *Tools → LivePull* → **This is the live site**, then **Copy** the connection code.
+2. **On your local site:** *Tools → LivePull* → **This is my copy** → paste the code → **Save and connect**.
 
-The screen now shows how many changes are waiting on live.
+The status line now shows how many changes are waiting on live.
 
 **Starting point matters.** LivePull records changes on live from the moment it's installed there. The easiest setup is:
 - Install on live first, then make your local copy (Local, WP Migrate, All-in-One, …) – or use **Copy everything from live** (below). LivePull detects that the database is a fresh copy and pulls only what changes after that.
-- Already had a local copy before installing? Do your first pull with **More options → Pull all content from live** (or catch up from the date you made the copy).
+- Already had a local copy before installing? Do your first pull with **More options → Compare all content with live** (or catch up from the date you made the copy).
 
 ## Everyday use
 
 On your local site, *Tools → LivePull*:
 
-| | |
+The status line at the top says where things stand, e.g. *Connected to client.co.uk · last pulled 2 hours ago · 5 changes waiting · 1 conflict*. If live can't be reached, **Fix it** checks each step and says what to change.
+
+| Tab | |
 |---|---|
-| **Preview changes** | Shows what would be created, updated or deleted, and any conflicts. Changes nothing. |
-| **Pull changes** | Backs up this site, then pulls. Progress is shown; large pulls run in batches and can be cancelled and resumed. |
-| **Conflicts** | Items changed on both sides since the last pull. Choose **Use live version** or **Keep mine**. |
-| **Your local changes** | Everything you've edited locally since it was last pulled. |
-| **Undo a pull or copy** | Restore the backup taken before any pull or copy. |
+| **Pull** | **Check for changes** lists what changed on live, with a tick box for each and filters by kind. Untick anything you don't want yet, then **Pull selected**: this site is backed up, then the changes come across. Unticked items are held back and offered again next time. |
+| **Conflicts** | Items changed on both sides since the last pull. **Compare** shows them side by side; then **Use live version** or **Keep mine**. Below: everything you've edited locally since the last pull. |
+| **History** | The last 30 pulls, scheduled pulls, full copies and restores, and what each brought across. |
+| **Copy everything** | Make this site an exact copy of live (see below). |
+| **Backups** | Restore the backup taken before any pull or copy. |
+| **Settings** | What to pull (optional groups), scheduled pulls, the connection, and **Report a problem**. |
 
 ## What gets pulled
 
 | Every pull | Only with *Copy everything from live* | Never |
 |---|---|---|
 | Posts, pages, custom post types (incl. WooCommerce products) | Theme, Customizer and page-builder theme options | WooCommerce orders |
-| Media library + files (all sizes) | Divi Theme Builder & Library, Elementor templates | Logged-in sessions |
-| Categories, tags, custom taxonomies | Widgets, forms and other plugin settings | Theme and plugin files (keep those in Git) |
-| Custom fields (ACF etc.) and page-builder content | Users | |
+| Media library + files (all sizes) | Widgets and other plugin settings | Logged-in sessions |
+| Categories, tags, custom taxonomies | Users | Theme and plugin files (keep those in Git) |
+| Custom fields (ACF etc.) and page-builder content | | |
 | Menus and menu locations | | |
 | Site title, tagline, homepage, posts page, sticky posts, site icon, logo | | |
+
+Optional, switched on under **Settings → What to pull** (or `wp livepull groups --on=…`):
+
+- **Page-builder templates** – Divi Library and Theme Builder, Elementor, Beaver Builder and Bricks templates. Elementor's site kit is never pulled.
+- **Forms** – Contact Form 7 and WPForms forms (not entries). Form shortcodes and blocks point at the local form.
+- **Comments and reviews** – approved and awaiting approval, with replies kept together. Never spam, and never commenters' IP addresses.
+- **ACF options pages** – on by default.
 
 IDs that point at other content are re-pointed to the matching local items – featured images, galleries, ACF image/relationship/taxonomy fields, Gutenberg blocks, `[gallery]`, Divi galleries, WooCommerce galleries/upsells, Elementor data, menu items, homepage setting. Live URLs are rewritten to your local URL.
 
@@ -74,7 +87,7 @@ If a live item isn't linked to anything locally yet, LivePull looks for the same
 
 *Tools → LivePull → Copy everything from live* replaces the local database with a copy of live and downloads missing or changed files from live's uploads folder.
 
-- Off by default on live, because it shares the whole database: on live, *Tools → LivePull → Let other sites pull from this one* → **Allow for 1 hour** (or **Always allow**).
+- Off by default on live, because it shares the whole database: on live, *Tools → LivePull → Key, full copies and recent changes* → **Allow for 1 hour** (or **Always allow**).
 - Your local database is fully backed up first; everything loads into temporary tables and is switched in at the very end, so **Cancel** leaves your site untouched.
 - URLs and server paths are rewritten, including inside serialized and JSON data; a different table prefix is handled; a different WordPress version is reconciled automatically.
 - Kept from your local site: its URL, its LivePull connection, and "Discourage search engines".
@@ -89,6 +102,14 @@ wp livepull status                     # connection + what's waiting
 wp livepull pull --dry-run             # preview
 wp livepull pull                       # pull (backs up first)
 wp livepull pull --since=2026-01-01    # catch up on everything changed since a date
+wp livepull pull --exclude=<key,…>     # hold some items back (keys from --dry-run)
+wp livepull pull --include-held=all    # also pull items held back earlier
+wp livepull held [--forget=all]        # items held back
+wp livepull history [--details]        # past pulls, copies and restores
+wp livepull schedule --every=daily     # pull automatically (off, hourly, twicedaily, daily, weekly)
+wp livepull groups --on=comments,forms # optional things to pull
+wp livepull doctor                     # check the connection step by step
+wp livepull report                     # details for a bug report (no keys)
 wp livepull conflicts                  # list conflicts
 wp livepull take <id> [--term]         # use live's version
 wp livepull keep <id> [--term]         # keep yours
@@ -107,7 +128,7 @@ wp livepull key                        # (on live) show the connection code
 - *Copy everything* is opt-in and can be time-limited; logged-in sessions are never copied.
 - Backups are kept outside the public web folder when the server allows (one folder per site), otherwise in `wp-content/livepull-backups` with deny rules and unguessable file names.
 - Files from live are only written inside uploads and never as executable or server-config files (`.php`, `.phar`, `.htaccess`, `.user.ini`…). Media is only downloaded from the live site or public addresses – never private, internal or cloud-metadata addresses.
-- Updates are only installed from this GitHub repository over HTTPS.
+- Updates are only installed from this GitHub repository over HTTPS, and only if the download matches its published checksum **and** carries a valid signature from the release workflow (Ed25519; the private key is a repository secret, the public key is in the plugin).
 - Deleting the plugin removes its settings, log, ID tags and backups.
 
 Found a vulnerability? Please report it privately – see [SECURITY.md](SECURITY.md).
@@ -157,7 +178,8 @@ Every release is checked by an end-to-end test suite that builds a real live sit
 |---|---|
 | Editors / page builders | Gutenberg core blocks, Elementor, Beaver Builder, SiteOrigin Page Builder, Spectra, Kadence Blocks, GenerateBlocks, Divi 4 (with Divi 4.27.9 installed) and Divi 5 content* |
 | Shop | WooCommerce simple and variable products, galleries, upsells, attributes |
-| Fields / SEO / languages | ACF (image, relationship, taxonomy fields), Yoast SEO, Polylang |
+| Fields / SEO / languages | ACF (image, relationship, taxonomy fields, options pages), Yoast SEO, Polylang |
+| Optional groups | Comments and replies, Contact Form 7 forms (block and shortcode), Divi Theme Builder header shown on local, media on an unreachable CDN |
 | Site structure | Menus, menu locations, homepage and posts page, site title, logo, icon |
 | Safety | Conflicts (edited on both sides), deletions, undo, *Copy everything* |
 
@@ -184,13 +206,15 @@ tests/perf.sh                        # big-site test
 ## Limitations
 
 - **One direction.** LivePull pulls live → local. Pushing local changes up to live isn't supported (yet) – deploy those your usual way.
-- Not supported yet: **multisite**, **WPML** (Polylang content works as normal posts/terms), **comments/reviews**, data in plugin-specific tables during normal pulls (e.g. Gravity Forms entries – use *Copy everything*).
+- Not supported yet: **multisite**, **WPML** (Polylang content works as normal posts/terms), **Gravity Forms** forms and other data kept in plugin-specific tables during normal pulls – use *Copy everything* for those.
 - Conflicts are per item (a whole post or term), not per field.
 - Must-use-plugin installs work but can't update themselves.
 
 ## FAQ / troubleshooting
 
-**"Nothing to pull" but I changed something on live.** On live, *Tools → LivePull → Let other sites pull from this one → Recent changes recorded on this site*. If your edit isn't listed, it's a kind of change normal pulls don't track (see the table above) – use *Copy everything*. If it is listed, check both sites run the same LivePull version.
+**Something's not working.** *Settings → Report a problem* gathers your set-up and recent pulls (never keys) and opens a GitHub issue with them filled in. For connection trouble, press **Fix it** (or `wp livepull doctor`) first.
+
+**"You're up to date" but I changed something on live.** On live, *Tools → LivePull → Key, full copies and recent changes → Recent changes recorded on this site*. If your edit isn't listed, it's a kind of change normal pulls don't track (see the table above) – use *Copy everything*. If it is listed, check both sites run the same LivePull version.
 
 **"Invalid sync key".** Copy the connection code from live again.
 
@@ -198,7 +222,7 @@ tests/perf.sh                        # big-site test
 
 **"Another pull is already running".** If nothing is running (the tab was closed mid-pull), click **Unlock and pull again**. It also unlocks itself after 15 minutes.
 
-**Duplicate pages after a pull.** Use *Undo a pull or copy* to restore the backup from before that pull, update to the latest version (it matches existing content), and pull again.
+**Duplicate pages after a pull.** Use the *Backups* tab to restore the backup from before that pull, update to the latest version (it matches existing content), and pull again.
 
 ## Contributing
 

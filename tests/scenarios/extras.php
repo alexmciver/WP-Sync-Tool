@@ -62,6 +62,13 @@ if ( 'verify' === $phase ) {
 		t_eq( get_option( 'options_phone' ), '020 7946 0000', 'ACF option text value' );
 	}
 
+	$h = LivePull_History::all();
+	t_ok( $h && 'pull' === $h[0]['kind'] && $h[0]['created_count'] > 0, 'the pull is listed in History with what came across' );
+	LivePull_Schedule::save( 'daily', false );
+	t_ok( LivePull_Schedule::next() > time(), 'turning on daily pulls schedules the next one' );
+	LivePull_Schedule::save( 'off', false );
+	t_eq( LivePull_Schedule::next(), 0, 'turning scheduled pulls off removes them' );
+
 	$img  = t_local( $s['img'] );
 	$file = $img ? get_attached_file( $img ) : '';
 	t_ok( $file && file_exists( $file ) && filesize( $file ) > 0, 'offloaded media downloaded from the fallback address' );
