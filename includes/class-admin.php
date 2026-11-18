@@ -22,7 +22,8 @@ final class LivePull_Admin {
 		// Finish a "Copy everything" whose last request ended while moving files into place.
 		add_action( 'admin_init', array( __CLASS__, 'resume_copy' ) );
 		add_action( 'admin_post_livepull_save', array( __CLASS__, 'save' ) );
-		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore', 'full' ) as $a ) {
+		add_action( 'admin_post_livepull_schedule', array( __CLASS__, 'save_schedule' ) );
+		foreach ( array( 'status', 'pull', 'resolve', 'local_changes', 'cancel', 'restore', 'full', 'forget_held', 'compare', 'health', 'diagnostics' ) as $a ) {
 			add_action( 'wp_ajax_livepull_' . $a, array( __CLASS__, 'ajax_' . $a ) );
 		}
 	}
@@ -411,12 +412,13 @@ final class LivePull_Admin {
 				$edit = 0 === strpos( $key, 'term:' ) ? get_edit_term_link( (int) $c['local_id'] ) : get_edit_post_link( (int) $c['local_id'], 'raw' );
 			}
 			printf(
-				'<tr data-key="%1$s"><td>%2$s</td><td>%3$s</td><td class="livepull-row-actions"><button type="button" class="button livepull-take">%4$s</button> <button type="button" class="button-link livepull-keep">%5$s</button></td></tr>',
+				'<tr data-key="%1$s"><td>%2$s</td><td>%3$s</td><td class="livepull-row-actions"><button type="button" class="button-link livepull-compare-btn">%6$s</button> <button type="button" class="button livepull-take">%4$s</button> <button type="button" class="button-link livepull-keep">%5$s</button></td></tr>',
 				esc_attr( $key ),
 				$edit ? '<a href="' . esc_url( $edit ) . '">' . esc_html( $c['label'] ) . '</a>' : esc_html( $c['label'] ),
 				esc_html( ucfirst( $c['reason'] ) ),
 				esc_html__( 'Use live version', 'livepull' ),
-				esc_html__( 'Keep mine', 'livepull' )
+				esc_html__( 'Keep mine', 'livepull' ),
+				esc_html__( 'Compare', 'livepull' )
 			);
 		}
 		echo '</tbody></table>';
@@ -565,10 +567,12 @@ final class LivePull_Admin {
 		if ( 'start' === $step ) {
 			delete_transient( $tkey );
 			$state = LivePull_Puller::start( array(
-				'dry_run'    => ! empty( $_POST['dry'] ),
-				'theirs'     => ! empty( $_POST['theirs'] ),
-				'redownload' => ! empty( $_POST['redownload'] ),
-				'since'      => ! empty( $_POST['all'] ) ? '1970-01-01' : ( isset( $_POST['since'] ) ? sanitize_text_field( wp_unslash( $_POST['since'] ) ) : '' ),
+				'dry_run'      => ! empty( $_POST['dry'] ),
+				'theirs'       => ! empty( $_POST['theirs'] ),
+				'redownload'   => ! empty( $_POST['redownload'] ),
+				'since'        => ! empty( $_POST['all'] ) ? '1970-01-01' : ( isset( $_POST['since'] ) ? sanitize_text_field( wp_unslash( $_POST['since'] ) ) : '' ),
+				'exclude'      => self::posted_keys( 'exclude' ),
+				'include_held' => self::posted_keys( 'include_held' ),
 			) );
 			if ( is_wp_error( $state ) ) {
 				wp_send_json_error( array( 'message' => $state->get_error_message(), 'code' => $state->get_error_code() ) );
@@ -609,14 +613,113 @@ final class LivePull_Admin {
 				'conflicts' => array_values( $r['conflicts'] ),
 				'skipped'   => $r['skipped'],
 				'errors'    => $r['errors'],
+				'held'      => isset( $r['held'] ) ? $r['held'] : array(),
 				'files'     => $r['files'],
 			),
+			'preview'   => $state['done'] && $state['opts']['dry_run'] ? array_values( $state['preview'] ) : array(),
+			'held_count' => count( LivePull_Puller::held() ),
 			'activity'  => $state['activity'],
 			'dl_total'  => (int) $state['dl_total'],
 			'dl_done'   => (int) $state['dl_done'],
 			'conflicts_html' => $state['done'] ? self::capture( array( __CLASS__, 'conflicts_table' ), LivePull_Puller::conflicts() ) : '',
 			'conflict_count' => count( LivePull_Puller::conflicts() ),
 		) );
+	}
+
+	/** Item keys ("post:abc123…") posted as a JSON list. */
+	private static function posted_keys( $field ) {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- called from ajax_pull() after check_ajax_referer().
+		$raw  = isset( $_POST[ $field ] ) ? json_decode( sanitize_textarea_field( wp_unslash( $_POST[ $field ] ) ), true ) : array();
+		$keys = array();
+		foreach ( (array) $raw as $k ) {
+			if ( is_string( $k ) && preg_match( '/^(post|term|option|comment):[a-f0-9]{32}$/', $k ) ) {
+				$keys[] = $k;
+			}
+		}
+		return $keys;
+	}
+
+	/** Side-by-side view of one conflict. */
+	public static function ajax_compare() {
+		check_ajax_referer( 'livepull' );
+		self::guard();
+		$key  = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : '';
+		$rows = LivePull_Puller::compare( $key );
+		if ( is_wp_error( $rows ) ) {
+			wp_send_json_error( array( 'message' => $rows->get_error_message() ) );
+		}
+		$html  = '<div class="livepull-compare">';
+		$same  = array();
+		foreach ( $rows as $r ) {
+			if ( $r['live'] === $r['local'] ) {
+				$same[] = $r['label'];
+				continue;
+			}
+			$diff  = wp_text_diff( $r['local'], $r['live'], array( 'title_left' => __( 'This site', 'livepull' ), 'title_right' => __( 'Live', 'livepull' ), 'show_split_view' => true ) );
+			$html .= '<h4>' . esc_html( $r['label'] ) . '</h4>' . ( $diff ? $diff : '<p class="livepull-compare-same">' . esc_html__( 'Only spacing differs.', 'livepull' ) . '</p>' );
+		}
+		if ( $same ) {
+			/* translators: %s: list of field names */
+			$html .= '<p class="livepull-compare-same">' . esc_html( sprintf( __( 'The same in both: %s.', 'livepull' ), implode( ', ', $same ) ) ) . '</p>';
+		}
+		$html .= '</div>';
+		wp_send_json_success( array( 'html' => wp_kses_post( $html ) ) );
+	}
+
+	/** Connection check: each step with what's wrong and how to fix it. */
+	public static function ajax_health() {
+		check_ajax_referer( 'livepull' );
+		self::guard();
+		$checks = LivePull_Health::run();
+		$fails  = count( array_filter( $checks, function ( $c ) {
+			return 'fail' === $c['status'];
+		} ) );
+		wp_send_json_success( array( 'html' => self::checks_html( $checks ), 'fails' => $fails ) );
+	}
+
+	private static function checks_html( array $checks ) {
+		$icons = array( 'ok' => '✓', 'warn' => '!', 'fail' => '✕' );
+		$html  = '<ul class="livepull-checks">';
+		foreach ( $checks as $c ) {
+			$html .= '<li class="is-' . esc_attr( $c['status'] ) . '"><strong>' . esc_html( $icons[ $c['status'] ] . ' ' . $c['title'] ) . '</strong>';
+			if ( $c['detail'] ) {
+				$html .= ' <span class="description">' . esc_html( $c['detail'] ) . '</span>';
+			}
+			if ( $c['fix'] ) {
+				$html .= '<p class="livepull-fix"><strong>' . esc_html__( 'How to fix:', 'livepull' ) . '</strong> ' . esc_html( $c['fix'] ) . '</p>';
+			}
+			$html .= '</li>';
+		}
+		return $html . '</ul>';
+	}
+
+	/** "Report a problem": the details to paste, and a pre-filled GitHub issue link. */
+	public static function ajax_diagnostics() {
+		check_ajax_referer( 'livepull' );
+		self::guard();
+		$text = LivePull_Health::diagnostics();
+		wp_send_json_success( array( 'text' => $text, 'issue_url' => LivePull_Health::issue_url( $text ) ) );
+	}
+
+	public static function save_schedule() {
+		check_admin_referer( 'livepull_schedule' );
+		if ( ! current_user_can( self::CAP ) ) {
+			wp_die( esc_html__( 'Not allowed.', 'livepull' ) );
+		}
+		LivePull_Schedule::save(
+			isset( $_POST['every'] ) ? sanitize_key( wp_unslash( $_POST['every'] ) ) : 'off',
+			! empty( $_POST['email'] )
+		);
+		wp_safe_redirect( self::url( array( 'tab' => 'settings', 'msg' => 'schedule' ) ) );
+		exit;
+	}
+
+	/** Remove items from the held-back list without pulling them. */
+	public static function ajax_forget_held() {
+		check_ajax_referer( 'livepull' );
+		self::guard();
+		LivePull_Puller::forget_held( self::posted_keys( 'keys' ) );
+		wp_send_json_success( array( 'held_count' => count( LivePull_Puller::held() ) ) );
 	}
 
 	public static function ajax_cancel() {

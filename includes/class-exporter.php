@@ -65,7 +65,7 @@ final class LivePull_Exporter {
 		return array(
 			'type'    => 'option',
 			'sync_id' => LivePull_Config::option_sid( $name ),
-			'option'  => array( 'name' => $name, 'mode' => true === $spec ? 'whole' : 'keys', 'value' => maybe_serialize( $value ) ),
+			'option'  => array( 'name' => $name, 'mode' => true === $spec ? 'whole' : 'keys', 'value' => maybe_serialize( $value ), 'refs' => is_string( $refs ) ? $refs : '' ),
 			'idmap'   => $e->idmap_public(),
 		);
 	}
@@ -73,6 +73,44 @@ final class LivePull_Exporter {
 	/** @internal */
 	public function idmap_public() {
 		return $this->idmap;
+	}
+
+	/**
+	 * A comment or review. The commenter's IP address and browser are left out; the name,
+	 * email and website come across (as they would with Copy everything).
+	 */
+	public static function comment( $comment_id ) {
+		$c = get_comment( (int) $comment_id );
+		if ( ! $c || ! LivePull_Logger::comment_syncable( $c ) || in_array( (string) $c->comment_approved, array( 'spam', 'trash', 'post-trashed' ), true ) ) {
+			return null;
+		}
+		$meta = array();
+		foreach ( (array) get_comment_meta( $c->comment_ID ) as $k => $vals ) {
+			if ( ! LivePull_Config::is_ignored_meta( $k ) ) {
+				$meta[ $k ] = $vals;
+			}
+		}
+		$user = $c->user_id ? get_userdata( $c->user_id ) : false;
+		return array(
+			'type'        => 'comment',
+			'sync_id'     => LivePull_Ids::for_comment( $c->comment_ID ),
+			'post_sid'    => LivePull_Ids::for_post( $c->comment_post_ID ),
+			'parent_sid'  => $c->comment_parent ? LivePull_Ids::for_comment( $c->comment_parent ) : '',
+			'comment'     => array(
+				'comment_author'       => $c->comment_author,
+				'comment_author_email' => $c->comment_author_email,
+				'comment_author_url'   => $c->comment_author_url,
+				'comment_date'         => $c->comment_date,
+				'comment_date_gmt'     => $c->comment_date_gmt,
+				'comment_content'      => $c->comment_content,
+				'comment_approved'     => (string) $c->comment_approved,
+				'comment_type'         => $c->comment_type,
+				'comment_karma'        => (int) $c->comment_karma,
+				'user_login'           => $user ? $user->user_login : '',
+			),
+			'meta'        => $meta,
+			'post_title'  => get_the_title( $c->comment_post_ID ),
+		);
 	}
 
 	public static function tombstone( $type, $sid ) {
@@ -132,7 +170,7 @@ final class LivePull_Exporter {
 
 	private function build_post( $post_id ) {
 		$post = get_post( $post_id );
-		if ( ! $post || 'auto-draft' === $post->post_status || ! LivePull_Config::post_type_ok( $post->post_type ) ) {
+		if ( ! $post || 'auto-draft' === $post->post_status || ! LivePull_Config::recordable_post_type( $post->post_type ) ) {
 			return null;
 		}
 		$sid      = LivePull_Ids::for_post( $post->ID );
@@ -159,7 +197,7 @@ final class LivePull_Exporter {
 		// Terms, by taxonomy, as sync IDs.
 		$terms = array();
 		foreach ( get_object_taxonomies( $post->post_type ) as $tax ) {
-			if ( ! LivePull_Config::taxonomy_ok( $tax ) ) {
+			if ( ! LivePull_Config::recordable_taxonomy( $tax ) ) {
 				continue;
 			}
 			$ids = wp_get_object_terms( $post->ID, $tax, array( 'fields' => 'ids', 'orderby' => 'term_order' ) );
@@ -241,12 +279,23 @@ final class LivePull_Exporter {
 		foreach ( array_unique( $extra ) as $name ) {
 			$files[] = array( 'path' => $dir . $name, 'url' => $url_dir . rawurlencode( $name ) );
 		}
+		// Media offloaded to S3/a CDN (WP Offload Media and similar) is fetched from wherever
+		// WordPress says it lives; the normal uploads address is kept as a second try, and the
+		// other way round.
+		$uploads = wp_get_upload_dir();
+		foreach ( $files as &$f ) {
+			$local = $uploads['baseurl'] . '/' . implode( '/', array_map( 'rawurlencode', explode( '/', $f['path'] ) ) );
+			if ( $local !== $f['url'] ) {
+				$f['alt'] = $local;
+			}
+		}
+		unset( $f );
 		return $files;
 	}
 
 	private function build_term( $term_id ) {
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::recordable_taxonomy( $term->taxonomy ) ) {
 			return null;
 		}
 		$sid      = LivePull_Ids::for_term( $term->term_id );

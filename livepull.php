@@ -38,7 +38,7 @@ if ( LivePull_Migrate::old_plugin_active() ) {
 }
 LivePull_Migrate::maybe_run();
 
-foreach ( array( 'config', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'puller', 'full' ) as $livepull_file ) {
+foreach ( array( 'config', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'history', 'puller', 'full', 'health', 'schedule' ) as $livepull_file ) {
 	require_once $livepull_dir . 'class-' . $livepull_file . '.php';
 }
 // Self-updates from GitHub: only in the GitHub download (the WordPress.org version is updated by WordPress.org).
@@ -52,6 +52,7 @@ LivePull_Rest::init();
 add_action( 'init', array( 'LivePull_Config', 'maybe_install' ), 1 );
 add_action( 'init', array( 'LivePull_Config', 'schedule' ), 20 );
 add_action( 'livepull_daily', array( 'LivePull_Config', 'daily' ) );
+LivePull_Schedule::init();
 register_activation_hook( __FILE__, array( 'LivePull_Config', 'install' ) );
 add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), function ( $links ) {
 	array_unshift( $links, '<a href="' . esc_url( admin_url( 'tools.php?page=livepull' ) ) . '">Open LivePull</a>' );

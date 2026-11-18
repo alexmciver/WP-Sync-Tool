@@ -59,7 +59,7 @@ final class LivePull_Importer {
 		// rebuilding these lookups for each handful is slow on big sites.
 		if ( null === self::$shared ) {
 			self::$shared = array(
-				'maps'    => array( 'post' => LivePull_Ids::map( 'post' ), 'term' => LivePull_Ids::map( 'term' ) ),
+				'maps'    => array( 'post' => LivePull_Ids::map( 'post' ), 'term' => LivePull_Ids::map( 'term' ), 'comment' => LivePull_Ids::map( 'comment' ) ),
 				'changed' => self::locally_changed(),
 			);
 		}
@@ -134,6 +134,11 @@ final class LivePull_Importer {
 	}
 
 	/** Replace live URLs with local ones inside strings / arrays (never inside raw serialized strings). */
+	/** Live's value with live addresses switched to this site's, for comparing. */
+	public function localise( $value ) {
+		return $this->urls( $value );
+	}
+
 	private function urls( $value ) {
 		if ( ! $this->url_from ) {
 			return $value;
@@ -226,12 +231,60 @@ final class LivePull_Importer {
 			return 0;
 		}
 		if ( 'option' === $item['type'] ) {
-			return 3; // Settings last: they point at pages/menus pulled in the same batch.
+			return 4; // Settings last: they point at pages/menus pulled in the same batch.
+		}
+		if ( 'comment' === $item['type'] ) {
+			return 3; // After the posts they belong to.
 		}
 		return ( isset( $item['post']['post_type'] ) && 'attachment' === $item['post']['post_type'] ) ? 1 : 2;
 	}
 
-	private function label( $item, $local_id = 0 ) {
+	/**
+	 * Key, readable label and kind ("page", "category", "setting"…) of an incoming item, for
+	 * previews and the held-back list.
+	 */
+	public static function describe( array $item ) {
+		global $wpdb;
+		$key  = ( isset( $item['type'] ) ? $item['type'] : '' ) . ':' . ( isset( $item['sync_id'] ) ? $item['sync_id'] : '' );
+		$kind = 'setting';
+		$id   = 0;
+		if ( 'comment' === $item['type'] ) {
+			$map = LivePull_Ids::map( 'comment' );
+			$id  = isset( $map[ $item['sync_id'] ] ) ? $map[ $item['sync_id'] ] : 0;
+			return array( 'key' => $key, 'label' => self::label( $item, $id ), 'kind' => 'comment', 'group' => __( 'Comments', 'livepull' ) );
+		}
+		if ( 'post' === $item['type'] ) {
+			$kind = isset( $item['post']['post_type'] ) ? $item['post']['post_type'] : '';
+			if ( '' === $kind ) {
+				$id   = (int) $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = %s AND meta_value = %s LIMIT 1", LivePull_Config::META_KEY, $item['sync_id'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery
+				$kind = $id ? (string) get_post_type( $id ) : 'post';
+			}
+		} elseif ( 'term' === $item['type'] ) {
+			$kind = isset( $item['term']['taxonomy'] ) ? $item['term']['taxonomy'] : '';
+			if ( '' === $kind ) {
+				$id   = (int) $wpdb->get_var( $wpdb->prepare( "SELECT term_id FROM {$wpdb->termmeta} WHERE meta_key = %s AND meta_value = %s LIMIT 1", LivePull_Config::META_KEY, $item['sync_id'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery
+				$t    = $id ? get_term( $id ) : null;
+				$kind = ( $t && ! is_wp_error( $t ) ) ? $t->taxonomy : 'term';
+			}
+		}
+		$obj = get_post_type_object( $kind );
+		$tax = $obj ? null : get_taxonomy( $kind );
+		return array(
+			'key'   => $key,
+			'label' => self::label( $item, $id ),
+			'kind'  => $kind,
+			'group' => $obj ? $obj->labels->name : ( $tax ? $tax->labels->name : ( 'setting' === $kind ? 'Settings' : $kind ) ),
+		);
+	}
+
+	private static function label( $item, $local_id = 0 ) {
+		if ( 'comment' === $item['type'] ) {
+			if ( isset( $item['comment'] ) ) {
+				return sprintf( 'comment by %s on "%s"', $item['comment']['comment_author'] ? $item['comment']['comment_author'] : 'someone', isset( $item['post_title'] ) ? $item['post_title'] : '' );
+			}
+			$c = $local_id ? get_comment( $local_id ) : null;
+			return $c ? sprintf( 'comment by %s on "%s"', $c->comment_author, get_the_title( $c->comment_post_ID ) ) : 'comment';
+		}
 		if ( 'option' === $item['type'] ) {
 			$name = isset( $item['option']['name'] ) ? $item['option']['name'] : self::option_name( $item['sync_id'] );
 			$nice = array( 'blogname' => 'Site title', 'blogdescription' => 'Tagline', 'show_on_front' => 'Homepage displays', 'page_on_front' => 'Homepage', 'page_for_posts' => 'Posts page', 'sticky_posts' => 'Sticky posts', 'site_icon' => 'Site icon' );
@@ -259,8 +312,11 @@ final class LivePull_Importer {
 	 */
 	public static function refused( array $item ) {
 		$type = isset( $item['type'] ) ? $item['type'] : '';
-		if ( ! in_array( $type, array( 'post', 'term', 'option' ), true ) || empty( $item['sync_id'] ) || ! is_string( $item['sync_id'] ) ) {
+		if ( ! in_array( $type, array( 'post', 'term', 'option', 'comment' ), true ) || empty( $item['sync_id'] ) || ! is_string( $item['sync_id'] ) ) {
 			return 'Ignored an item of an unknown kind sent by live.';
+		}
+		if ( 'comment' === $type ) {
+			return LivePull_Config::group_on( 'comments' ) ? '' : 'Ignored a comment: comments aren\'t pulled on this site.';
 		}
 		if ( ! empty( $item['deleted'] ) ) {
 			return ''; // Deletions only ever touch items already linked here.
@@ -287,6 +343,91 @@ final class LivePull_Importer {
 			}
 		}
 		return '';
+	}
+
+	/** Comments and reviews: linked to the local copy of their post (fetched if needed). */
+	private function handle_comment( array $item, $key ) {
+		$sid   = $item['sync_id'];
+		$local = isset( $this->maps['comment'][ $sid ] ) ? (int) $this->maps['comment'][ $sid ] : 0;
+		$conflict = isset( $this->local_changed[ $key ] ) && ! ( $this->opts['theirs'] || in_array( $key, (array) $this->opts['force'], true ) );
+		$this->handled[ $key ] = $local;
+		if ( ! empty( $item['deleted'] ) ) {
+			if ( ! $local ) {
+				return 0;
+			}
+			if ( $conflict ) {
+				$this->conflict( $key, $item, $local, 'deleted on live, but you changed it locally' );
+				return $local;
+			}
+			if ( ! $this->opts['dry_run'] ) {
+				wp_delete_comment( $local, true );
+				unset( $this->maps['comment'][ $sid ] );
+				$this->mark_synced( 'comment', $sid, $local );
+			}
+			$this->report['deleted'][] = self::label( $item, $local );
+			return 0;
+		}
+		if ( $conflict ) {
+			$this->conflict( $key, $item, $local, 'changed on live AND changed locally' );
+			return $local;
+		}
+		if ( $this->opts['dry_run'] ) {
+			$this->report[ $local ? 'updated' : 'created' ][] = self::label( $item, $local );
+			return $local;
+		}
+		$post = ! empty( $item['post_sid'] ) ? (int) $this->resolve_sid( 'post', $item['post_sid'] ) : 0;
+		if ( ! $post ) {
+			$this->report['skipped'][] = self::label( $item ) . ': its post isn\'t on this site';
+			return 0;
+		}
+		$c      = $item['comment'];
+		$parent = ! empty( $item['parent_sid'] ) ? (int) $this->resolve_sid( 'comment', $item['parent_sid'] ) : 0;
+		$user   = ! empty( $c['user_login'] ) ? get_user_by( 'login', $c['user_login'] ) : false;
+		$data   = array(
+			'comment_post_ID'      => $post,
+			'comment_parent'       => $parent,
+			'user_id'              => $user ? (int) $user->ID : 0,
+			'comment_author'       => $c['comment_author'],
+			'comment_author_email' => $c['comment_author_email'],
+			'comment_author_url'   => $c['comment_author_url'],
+			'comment_date'         => $c['comment_date'],
+			'comment_date_gmt'     => $c['comment_date_gmt'],
+			'comment_content'      => $this->urls( $c['comment_content'] ),
+			'comment_approved'     => in_array( $c['comment_approved'], array( '0', '1' ), true ) ? $c['comment_approved'] : '0',
+			'comment_type'         => sanitize_key( $c['comment_type'] ),
+			'comment_karma'        => (int) $c['comment_karma'],
+		);
+		if ( $local && get_comment( $local ) ) {
+			$data['comment_ID'] = $local;
+			wp_update_comment( wp_slash( $data ) );
+			$id = $local;
+		} else {
+			$id = (int) wp_insert_comment( wp_slash( $data ) );
+			if ( $id ) {
+				update_comment_meta( $id, LivePull_Config::META_KEY, $sid );
+			}
+		}
+		if ( ! $id ) {
+			$this->report['errors'][] = 'Could not save ' . self::label( $item );
+			return 0;
+		}
+		foreach ( (array) $item['meta'] as $mk => $vals ) {
+			if ( LivePull_Config::is_ignored_meta( $mk ) ) {
+				continue;
+			}
+			delete_comment_meta( $id, $mk );
+			foreach ( (array) $vals as $v ) {
+				add_comment_meta( $id, $mk, LivePull_Payload::unserialize( $v ) );
+			}
+		}
+		if ( function_exists( 'wc_get_product' ) && 'product' === get_post_type( $post ) && class_exists( 'WC_Comments' ) ) {
+			WC_Comments::clear_transients( $post ); // Review counts and average rating.
+		}
+		$this->maps['comment'][ $sid ] = $id;
+		$this->handled[ $key ]         = $id;
+		$this->mark_synced( 'comment', $sid, $id );
+		$this->report[ $local ? 'updated' : 'created' ][] = self::label( $item, $id );
+		return $id;
 	}
 
 	/** Settings: applied in the refs pass so page/menu IDs inside them are already local. */
@@ -354,6 +495,10 @@ final class LivePull_Importer {
 		$o     = self::option_as_allowed( $item['option'] );
 		$value = $this->urls( LivePull_Payload::unserialize( $o['value'] ) );
 		$refs  = LivePull_Config::option_refs( $o['name'] );
+		if ( ! $refs && 0 === strpos( $o['name'], 'options_' ) && isset( $item['option']['refs'] ) && in_array( $item['option']['refs'], array( 'post', 'term' ), true ) ) {
+			// An ACF option whose field details arrive in this same pull: live knows what it holds.
+			$refs = $item['option']['refs'];
+		}
 		if ( is_array( $refs ) && is_array( $value ) ) {
 			foreach ( $refs as $k => $kind ) {
 				if ( isset( $value[ $k ] ) ) {
@@ -395,6 +540,9 @@ final class LivePull_Importer {
 		}
 		if ( 'option' === $type ) {
 			return $this->handle_option( $item, $key );
+		}
+		if ( 'comment' === $type ) {
+			return $this->handle_comment( $item, $key );
 		}
 		$local   = isset( $this->maps[ $type ][ $sid ] ) ? $this->maps[ $type ][ $sid ] : 0;
 		$matched = false;
@@ -907,11 +1055,15 @@ final class LivePull_Importer {
 			if ( file_exists( $dest ) && ! $this->opts['redownload'] ) {
 				continue;
 			}
+			$alt = isset( $f['alt'] ) && preg_match( '#^https?://#i', (string) $f['alt'] ) ? (string) $f['alt'] : '';
 			if ( $this->opts['defer_files'] ) {
-				$this->report['downloads'][] = array( 'url' => $url, 'path' => $path );
+				$this->report['downloads'][] = array( 'url' => $url, 'path' => $path, 'alt' => $alt );
 				continue;
 			}
 			$res = $this->client->download( $url, $dest );
+			if ( is_wp_error( $res ) && $alt ) {
+				$res = $this->client->download( $alt, $dest );
+			}
 			if ( is_wp_error( $res ) ) {
 				$this->report['errors'][] = 'Media download failed: ' . $res->get_error_message();
 			} else {

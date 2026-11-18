@@ -24,7 +24,9 @@ foreach ( array( 'lpulltmp_', 'lpullold_', 'lprst_' ) as $livepull_mark ) {
 }
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE meta_key = %s", '_livepull_id' ) );
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->termmeta} WHERE meta_key = %s", '_livepull_id' ) );
+$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->commentmeta} WHERE meta_key = %s", '_livepull_id' ) );
 wp_clear_scheduled_hook( 'livepull_daily' );
+wp_clear_scheduled_hook( 'livepull_scheduled_pull' );
 
 // Backups: wherever LivePull kept them.
 $livepull_site = sanitize_file_name( basename( untrailingslashit( ABSPATH ) ) ) . '-' . substr( md5( ABSPATH . '|' . DB_NAME . '|' . $wpdb->prefix ), 0, 10 );

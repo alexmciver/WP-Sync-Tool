@@ -112,11 +112,20 @@ class LivePull_CLI {
 	 * [--force]
 	 * : Ignore the "another pull is running" lock.
 	 *
+	 * [--exclude=<keys>]
+	 * : Comma-separated item keys (shown by --dry-run) to hold back this time. Held items are
+	 * offered again later; see `wp livepull held`.
+	 *
+	 * [--include-held=<keys>]
+	 * : Comma-separated held-back item keys to pull now, or "all".
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     wp livepull pull --dry-run
 	 *     wp livepull pull
 	 *     wp livepull pull --since=2026-10-01
+	 *     wp livepull pull --exclude=post:0123456789abcdef0123456789abcdef
+	 *     wp livepull pull --include-held=all
 	 */
 	public function pull( $args, $assoc ) {
 		$flag  = function ( $k, $d = false ) use ( $assoc ) {
@@ -131,6 +140,9 @@ class LivePull_CLI {
 			'redownload'  => $flag( 'redownload-media' ),
 			'url_replace' => $flag( 'url-replace', true ),
 			'force'       => $flag( 'force' ),
+			'exclude'     => isset( $assoc['exclude'] ) ? array_map( 'trim', explode( ',', $assoc['exclude'] ) ) : array(),
+			'include_held' => isset( $assoc['include-held'] ) ? ( 'all' === $assoc['include-held'] ? array_keys( LivePull_Puller::held() ) : array_map( 'trim', explode( ',', $assoc['include-held'] ) ) ) : array(),
+			'source'      => 'cli',
 		) );
 		if ( is_wp_error( $state ) ) {
 			WP_CLI::error( $state->get_error_message() );
@@ -153,6 +165,162 @@ class LivePull_CLI {
 		} while ( ! $state['done'] );
 
 		$this->print_report( $state['report'], $state['opts']['dry_run'] );
+		if ( $state['opts']['dry_run'] && $state['preview'] ) {
+			WP_CLI::log( '' );
+			WP_CLI::log( 'Item keys (use with --exclude or --include-held):' );
+			\WP_CLI\Utils\format_items( 'table', array_map( function ( $p ) {
+				return array( 'key' => $p['key'], 'action' => $p['action'] . ( $p['held'] ? ' (held)' : '' ), 'item' => $p['label'] );
+			}, array_values( $state['preview'] ) ), array( 'key', 'action', 'item' ) );
+		}
+		if ( ! empty( $state['report']['held'] ) ) {
+			WP_CLI::log( sprintf( 'Held back for later: %d item(s). See `wp livepull held`.', count( $state['report']['held'] ) ) );
+		}
+	}
+
+	/**
+	 * Check the connection to live, and say how to fix anything that's wrong.
+	 */
+	public function doctor( $args, $assoc ) {
+		$fails = 0;
+		foreach ( LivePull_Health::run() as $c ) {
+			$colour = array( 'ok' => '%G✓', 'warn' => '%Y!', 'fail' => '%R✕' );
+			WP_CLI::log( WP_CLI::colorize( $colour[ $c['status'] ] . ' ' . $c['title'] . '%n' ) . ( $c['detail'] ? '  (' . $c['detail'] . ')' : '' ) );
+			if ( $c['fix'] ) {
+				WP_CLI::log( '    How to fix: ' . $c['fix'] );
+			}
+			$fails += 'fail' === $c['status'] ? 1 : 0;
+		}
+		$fails ? WP_CLI::error( 'Something needs fixing (see above).' ) : WP_CLI::success( 'All good.' );
+	}
+
+	/**
+	 * Print the details to include in a bug report (no keys or passwords).
+	 */
+	public function report( $args, $assoc ) {
+		WP_CLI::log( LivePull_Health::diagnostics() );
+	}
+
+	/**
+	 * Show or change which optional kinds of content this site pulls.
+	 *
+	 * [--on=<groups>]
+	 * : Comma-separated groups to switch on (templates, forms, comments, acf_options).
+	 *
+	 * [--off=<groups>]
+	 * : Comma-separated groups to switch off.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp livepull groups
+	 *     wp livepull groups --on=comments,forms
+	 */
+	public function groups( $args, $assoc ) {
+		$g = LivePull_Config::groups();
+		foreach ( array( 'on' => true, 'off' => false ) as $flag => $val ) {
+			if ( isset( $assoc[ $flag ] ) ) {
+				foreach ( array_filter( array_map( 'trim', explode( ',', $assoc[ $flag ] ) ) ) as $name ) {
+					if ( ! isset( $g[ $name ] ) ) {
+						WP_CLI::error( "Unknown group \"$name\". Choose from: " . implode( ', ', array_keys( $g ) ) );
+					}
+					$g[ $name ] = $val;
+				}
+			}
+		}
+		if ( isset( $assoc['on'] ) || isset( $assoc['off'] ) ) {
+			LivePull_Config::save_groups( $g );
+		}
+		$defs = LivePull_Config::optional_groups();
+		$rows = array();
+		foreach ( LivePull_Config::groups() as $name => $on ) {
+			$rows[] = array( 'group' => $name, 'pulled' => $on ? 'yes' : 'no', 'what' => $defs[ $name ]['label'] );
+		}
+		WP_CLI\Utils\format_items( 'table', $rows, array( 'group', 'pulled', 'what' ) );
+	}
+
+	/**
+	 * Show or change scheduled pulls.
+	 *
+	 * [--every=<frequency>]
+	 * : off, hourly, twicedaily, daily or weekly.
+	 *
+	 * [--email=<yes|no>]
+	 * : Email a summary when something came across or needs a decision.
+	 *
+	 * [--run-now]
+	 * : Run a scheduled pull now (as the scheduler would).
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp livepull schedule --every=daily
+	 *     wp livepull schedule --every=off
+	 */
+	public function schedule( $args, $assoc ) {
+		$s = LivePull_Schedule::settings();
+		if ( isset( $assoc['every'] ) || isset( $assoc['email'] ) ) {
+			$s = LivePull_Schedule::save( isset( $assoc['every'] ) ? $assoc['every'] : $s['every'], isset( $assoc['email'] ) ? 'yes' === $assoc['email'] : $s['email'] );
+		}
+		if ( \WP_CLI\Utils\get_flag_value( $assoc, 'run-now' ) ) {
+			$r = LivePull_Schedule::run();
+			$s = LivePull_Schedule::settings();
+		}
+		$next = LivePull_Schedule::next();
+		WP_CLI::log( 'Scheduled pulls: ' . LivePull_Schedule::choices()[ $s['every'] ] . ( $s['email'] ? ', with email summaries' : '' ) );
+		WP_CLI::log( 'Next run: ' . ( $next ? wp_date( 'Y-m-d H:i', $next ) : '-' ) );
+		WP_CLI::log( 'Last run: ' . ( $s['last_run'] ? wp_date( 'Y-m-d H:i', $s['last_run'] ) . ' – ' . $s['last_result'] : '-' ) );
+	}
+
+	/**
+	 * List items held back from earlier pulls, or forget them.
+	 *
+	 * [--forget=<keys>]
+	 * : Comma-separated keys to remove from the list without pulling them, or "all".
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp livepull held
+	 *     wp livepull pull --include-held=all
+	 */
+	public function held( $args, $assoc ) {
+		if ( isset( $assoc['forget'] ) ) {
+			$keys = 'all' === $assoc['forget'] ? array_keys( LivePull_Puller::held() ) : array_map( 'trim', explode( ',', $assoc['forget'] ) );
+			LivePull_Puller::forget_held( $keys );
+			WP_CLI::success( 'Forgotten.' );
+			return;
+		}
+		$held = LivePull_Puller::held();
+		if ( ! $held ) {
+			WP_CLI::success( 'Nothing is held back.' );
+			return;
+		}
+		$rows = array();
+		foreach ( $held as $key => $h ) {
+			$rows[] = array( 'key' => $key, 'item' => $h['label'], 'held since' => gmdate( 'Y-m-d H:i', (int) $h['time'] ) );
+		}
+		\WP_CLI\Utils\format_items( 'table', $rows, array( 'key', 'item', 'held since' ) );
+	}
+
+	/**
+	 * Show recent pulls, copies and restores on this site.
+	 *
+	 * [--details]
+	 * : List the items in each entry.
+	 */
+	public function history( $args, $assoc ) {
+		$all = LivePull_History::all();
+		if ( ! $all ) {
+			WP_CLI::success( 'No history yet.' );
+			return;
+		}
+		foreach ( $all as $e ) {
+			WP_CLI::log( sprintf( '%s  %-7s %-9s %s%s', wp_date( 'Y-m-d H:i', $e['time'] ), $e['kind'], $e['source'], LivePull_History::summary( $e ), $e['note'] ? ' (' . $e['note'] . ')' : '' ) );
+			if ( \WP_CLI\Utils\get_flag_value( $assoc, 'details' ) ) {
+				foreach ( array( 'created', 'updated', 'deleted', 'conflicts', 'held', 'skipped', 'errors' ) as $k ) {
+					foreach ( $e[ $k ] as $line ) {
+						WP_CLI::log( '      ' . $k . ': ' . $line );
+					}
+				}
+			}
+		}
 	}
 
 	/**

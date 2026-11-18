@@ -34,6 +34,9 @@ function t_load( $name ) {
 
 /** Sync ID of a live object (call on live). */
 function t_sid( $id, $type = 'post' ) {
+	if ( 'comment' === $type ) {
+		return LivePull_Ids::for_comment( $id );
+	}
 	return 'post' === $type ? LivePull_Ids::for_post( $id ) : LivePull_Ids::for_term( $id );
 }
 

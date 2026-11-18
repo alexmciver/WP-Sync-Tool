@@ -74,8 +74,14 @@ if ( 'verify' === $phase ) {
 	t_ok( false !== strpos( $d5, '"value":"' . $a . ',' . $c . '"' ), 'Divi 5 gallery IDs point at local images' );
 	t_urls_local( $d5, 'Divi 5 content' );
 	t_ok( is_array( parse_blocks( $d5 ) ) && count( parse_blocks( $d5 ) ) > 0, 'Divi 5 blocks still parse' );
-	t_eq( t_local( $s['tb'] ), 0, 'Divi Theme Builder layout NOT pulled by a normal pull (developer-owned)' );
-	t_eq( t_local( $s['lib'] ), 0, 'Divi Library layout NOT pulled by a normal pull (developer-owned)' );
+	$tpl_on = LivePull_Config::group_on( 'templates' );
+	if ( $tpl_on ) {
+		t_ok( t_local( $s['tb'] ) > 0, 'Divi Theme Builder layout pulled (templates switched on)' );
+		t_ok( t_local( $s['lib'] ) > 0, 'Divi Library layout pulled (templates switched on)' );
+	} else {
+		t_eq( t_local( $s['tb'] ), 0, 'Divi Theme Builder layout NOT pulled by a normal pull (templates off)' );
+		t_eq( t_local( $s['lib'] ), 0, 'Divi Library layout NOT pulled by a normal pull (templates off)' );
+	}
 
 	if ( $divi ) {
 		$html = t_renders( $p4, 'Divi 4 page' );
@@ -86,7 +92,13 @@ if ( 'verify' === $phase ) {
 		t_ok( false !== strpos( $html, 'et_pb_gallery' ) && false !== strpos( $html, wp_get_attachment_url( $b ) ), 'Divi gallery shows the local images' );
 		t_ok( false !== strpos( $html, 'href="' . get_permalink( $contact ) . '"' ), 'Divi button links to the local page' );
 		t_ok( false !== strpos( $html, 'et_full_width_page' ), 'Divi full-width layout applied' );
-		t_ok( false === strpos( $html, 'DIVI-TB-HEADER' ), 'live Theme Builder header not applied by a normal pull' );
+		if ( $tpl_on ) {
+			if ( ! empty( $s['tb_live'] ) ) {
+				t_ok( false !== strpos( $html, 'DIVI-TB-HEADER' ), 'live Theme Builder header shows on local (templates switched on)' );
+			}
+		} else {
+			t_ok( false === strpos( $html, 'DIVI-TB-HEADER' ), 'live Theme Builder header not applied by a normal pull' );
+		}
 		t_renders( $contact, 'Divi plain page' );
 		// View it again (Divi writes its caches on view) so the change phase proves views aren't edits.
 		t_fetch( get_permalink( $p4 ) );

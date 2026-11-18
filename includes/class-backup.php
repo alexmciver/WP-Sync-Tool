@@ -400,6 +400,7 @@ final class LivePull_Backup {
 			}
 			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		};
+		$history = LivePull_History::all();
 		self::drop_restore_tables();
 		$run( 'SET FOREIGN_KEY_CHECKS=0' );
 		$tables = array();
@@ -460,6 +461,9 @@ final class LivePull_Backup {
 		}
 		// Backups are taken at the start of a pull, so they contain that pull's lock.
 		delete_transient( 'livepull_lock' );
+		// The history describes this site's past, so it isn't wound back with the database.
+		update_option( LivePull_History::OPTION, $history, false );
+		LivePull_History::add( 'restore', array(), array( 'note' => basename( $file ) ) );
 		return true;
 	}
 

@@ -23,6 +23,13 @@ final class LivePull_Updater {
 	const CACHE     = 'livepull_github_release';
 	const CACHE_TTL = 6 * HOUR_IN_SECONDS;
 
+	/**
+	 * Public half of the key every release is signed with (Ed25519). The private half is only
+	 * in the repository's release workflow, so a zip swapped on GitHub, or a checksum file
+	 * changed to match it, still can't pass: only a signed release installs.
+	 */
+	const SIGNING_KEY = 'GJk5DaV16w4hlMIqonLL7nZGp5ckU9eoZSyFSSPXfUQ=';
+
 	public static function init() {
 		if ( defined( 'LIVEPULL_DISABLE_UPDATER' ) && LIVEPULL_DISABLE_UPDATER ) {
 			return;
@@ -245,7 +252,43 @@ final class LivePull_Updater {
 			wp_delete_file( $file );
 			return new WP_Error( 'livepull_checksum', 'The downloaded LivePull update didn\'t match its published checksum, so it was not installed.' );
 		}
+		$signed = self::signed( $package, $file );
+		if ( is_wp_error( $signed ) ) {
+			wp_delete_file( $file );
+			return $signed;
+		}
 		return $file;
+	}
+
+	/**
+	 * Check the release's signature (livepull.zip.sig) against the key built into this copy.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function signed( $package, $file ) {
+		$fail = new WP_Error( 'livepull_signature', 'This LivePull update isn\'t signed by its developer, so it was not installed. Download livepull.zip from GitHub and upload it if you trust it.' );
+		if ( ! function_exists( 'sodium_crypto_sign_verify_detached' ) ) {
+			return $fail;
+		}
+		$res = wp_remote_get( $package . '.sig', array( 'timeout' => 20, 'redirection' => 5, 'headers' => array( 'User-Agent' => 'LivePull-Updater' ) ) );
+		if ( is_wp_error( $res ) || 200 !== (int) wp_remote_retrieve_response_code( $res ) ) {
+			return $fail;
+		}
+		return self::signature_ok( trim( wp_remote_retrieve_body( $res ) ), (string) file_get_contents( $file ) ) ? true : $fail; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- local temp file.
+	}
+
+	/** True when $sig (base64) is a valid signature of $data by SIGNING_KEY. */
+	public static function signature_ok( $sig, $data ) {
+		$sig = base64_decode( (string) $sig, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- signature encoding.
+		$key = base64_decode( self::SIGNING_KEY, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- key encoding.
+		if ( ! $sig || ! $key || 64 !== strlen( $sig ) || 32 !== strlen( $key ) ) {
+			return false;
+		}
+		try {
+			return sodium_crypto_sign_verify_detached( $sig, $data, $key );
+		} catch ( \Throwable $e ) {
+			return false;
+		}
 	}
 
 	/** Newer release info if one exists, else null. */

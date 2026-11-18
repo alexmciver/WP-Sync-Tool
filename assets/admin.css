@@ -65,3 +65,32 @@
 .livepull-sub summary { cursor: pointer; color: #2271b1; }
 .livepull-sub summary::before { content: none !important; }
 @media (max-width: 782px) { .livepull-what-grid { grid-template-columns: 1fr; } }
+
+/* Preview pick list */
+.livepull-picker-filters { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.livepull-chip { background: #f0f6fc; border: 1px solid #c5d9ed; border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+.livepull-picker .livepull-list summary input { margin: 0 4px 0 0; }
+.livepull-picker li label { display: inline-flex; align-items: center; gap: 4px; }
+.livepull-tag { font-size: 11px; color: #50575e; background: #f0f0f1; border-radius: 3px; padding: 0 6px; }
+.livepull-picker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* Side-by-side comparison */
+.livepull-compare { margin: 8px 0 16px; }
+.livepull-compare table.diff { width: 100%; table-layout: fixed; }
+.livepull-compare table.diff td, .livepull-compare table.diff th { word-wrap: break-word; vertical-align: top; }
+.livepull-compare h4 { margin: 12px 0 4px; }
+.livepull-compare-same { color: #50575e; font-style: italic; }
+
+/* Health check */
+.livepull-checks { list-style: none; margin: 8px 0; padding: 0; }
+.livepull-checks li { padding: 8px 10px; border-left: 4px solid #dcdcde; background: #f6f7f7; margin: 6px 0; border-radius: 0 4px 4px 0; }
+.livepull-checks li.is-ok { border-color: #00a32a; }
+.livepull-checks li.is-warn { border-color: #dba617; background: #fcf9e8; }
+.livepull-checks li.is-fail { border-color: #d63638; background: #fcf0f1; }
+.livepull-checks .livepull-fix { margin: 4px 0 0; color: #1d2327; }
+.livepull-checks pre { white-space: pre-wrap; background: #fff; padding: 6px 8px; border: 1px solid #dcdcde; font-size: 12px; margin: 4px 0 0; }
+
+/* History */
+.livepull-history td, .livepull-history th { vertical-align: top; }
+.livepull-history details summary { cursor: pointer; }
+.livepull-diag { width: 100%; min-height: 220px; font-family: Consolas, Monaco, monospace; font-size: 12px; }

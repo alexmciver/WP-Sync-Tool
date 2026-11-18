@@ -49,6 +49,25 @@ final class LivePull_Ids {
 		return get_post_meta( $post_id, LivePull_Config::META_KEY, true ) ?: $sid;
 	}
 
+	/** Comments: same idea, from the original ID and date (identical on both copies after a clone). */
+	public static function for_comment( $comment_id, $create = true ) {
+		$comment_id = (int) $comment_id;
+		if ( $comment_id <= 0 ) {
+			return null;
+		}
+		$sid = get_comment_meta( $comment_id, LivePull_Config::META_KEY, true );
+		if ( $sid || ! $create ) {
+			return $sid ? $sid : null;
+		}
+		$c = get_comment( $comment_id );
+		if ( ! $c ) {
+			return null;
+		}
+		$sid = md5( 'comment|' . $c->comment_ID . '|' . $c->comment_date_gmt );
+		add_comment_meta( $comment_id, LivePull_Config::META_KEY, $sid, true );
+		return $sid;
+	}
+
 	public static function for_term( $term_id, $create = true ) {
 		$term_id = (int) $term_id;
 		if ( $term_id <= 0 ) {
@@ -175,6 +194,8 @@ final class LivePull_Ids {
 		global $wpdb;
 		if ( 'post' === $kind ) {
 			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, post_id AS id FROM {$wpdb->postmeta} WHERE meta_key = %s", LivePull_Config::META_KEY ) );
+		} elseif ( 'comment' === $kind ) {
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, comment_id AS id FROM {$wpdb->commentmeta} WHERE meta_key = %s", LivePull_Config::META_KEY ) );
 		} else {
 			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT meta_value AS sid, term_id AS id FROM {$wpdb->termmeta} WHERE meta_key = %s", LivePull_Config::META_KEY ) );
 		}

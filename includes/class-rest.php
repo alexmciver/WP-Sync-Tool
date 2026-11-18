@@ -200,6 +200,11 @@ final class LivePull_Rest {
 			}
 			return 'delete' === $row->action ? LivePull_Exporter::tombstone( 'option', $row->sync_id ) : null;
 		}
+		if ( 'comment' === $row->object_type ) {
+			$map = LivePull_Ids::map( 'comment' );
+			$c   = isset( $map[ $row->sync_id ] ) ? LivePull_Exporter::comment( $map[ $row->sync_id ] ) : null;
+			return $c ? $c : LivePull_Exporter::tombstone( 'comment', $row->sync_id );
+		}
 		if ( 'delete' === $row->action ) {
 			// Only a tombstone if it really is gone (it may have been restored since).
 			$map = LivePull_Ids::map( $row->object_type );
@@ -241,7 +246,7 @@ final class LivePull_Rest {
 		$after = max( 0, (int) $r['after'] );
 		$limit = self::limit( $r );
 		$types = get_post_types();
-		$types = array_values( array_filter( $types, array( 'LivePull_Config', 'post_type_ok' ) ) );
+		$types = array_values( array_filter( $types, array( 'LivePull_Config', 'recordable_post_type' ) ) );
 		$in    = implode( ',', array_fill( 0, count( $types ), '%s' ) );
 
 		// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $in is one %s placeholder per post type.
@@ -265,7 +270,17 @@ final class LivePull_Rest {
 					$items[] = $item;
 				}
 			}
-			$taxes = array_values( array_filter( get_taxonomies(), array( 'LivePull_Config', 'taxonomy_ok' ) ) );
+			// Comments made since the date (sites that don't pull comments skip them).
+			if ( ! empty( $r['comments'] ) ) {
+				$cids = get_comments( array( 'status' => 'all', 'date_query' => array( array( 'after' => gmdate( 'Y-m-d H:i:s', $since ), 'column' => 'comment_date_gmt', 'inclusive' => true ) ), 'fields' => 'ids', 'number' => 5000 ) );
+				foreach ( (array) $cids as $cid ) {
+					$item = LivePull_Exporter::comment( $cid );
+					if ( $item ) {
+						$items[] = $item;
+					}
+				}
+			}
+			$taxes = array_values( array_filter( get_taxonomies(), array( 'LivePull_Config', 'recordable_taxonomy' ) ) );
 			$terms = get_terms( array( 'taxonomy' => $taxes, 'hide_empty' => false, 'fields' => 'ids' ) );
 			if ( ! is_wp_error( $terms ) ) {
 				foreach ( $terms as $tid ) {
@@ -296,12 +311,15 @@ final class LivePull_Rest {
 			$item = isset( $map[ (string) $r['id'] ] ) ? LivePull_Exporter::option( $map[ (string) $r['id'] ] ) : null;
 			return $item ? $item : new WP_Error( 'livepull_not_found', 'Not found.', array( 'status' => 404 ) );
 		}
+		if ( ! in_array( $type, array( 'post', 'term', 'comment' ), true ) ) {
+			return new WP_Error( 'livepull_not_found', 'Not found.', array( 'status' => 404 ) );
+		}
 		$map  = LivePull_Ids::map( $type );
 		$sid  = (string) $r['id'];
 		if ( ! isset( $map[ $sid ] ) ) {
 			return new WP_Error( 'livepull_not_found', 'Not found.', array( 'status' => 404 ) );
 		}
-		$item = 'post' === $type ? LivePull_Exporter::post( $map[ $sid ] ) : LivePull_Exporter::term( $map[ $sid ] );
+		$item = 'post' === $type ? LivePull_Exporter::post( $map[ $sid ] ) : ( 'comment' === $type ? LivePull_Exporter::comment( $map[ $sid ] ) : LivePull_Exporter::term( $map[ $sid ] ) );
 		if ( ! $item ) {
 			return new WP_Error( 'livepull_excluded', 'This object type is not synced.', array( 'status' => 404 ) );
 		}

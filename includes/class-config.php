@@ -75,7 +75,115 @@ final class LivePull_Config {
 	 * (owned by the developer, deployed separately) or data that should never be
 	 * copied around (orders).
 	 */
-	public static function excluded_post_types() {
+	/**
+	 * Optional kinds of content. Live always records them; each local site chooses whether to
+	 * accept them (Tools → LivePull → Settings).
+	 */
+	public static function optional_groups() {
+		return array(
+			'templates'   => array(
+				'label'      => __( 'Page-builder templates: Elementor templates, Divi Library and Theme Builder, Beaver Builder and Bricks templates', 'livepull' ),
+				'post_types' => array( 'et_pb_layout', 'et_template', 'et_header_layout', 'et_body_layout', 'et_footer_layout', 'et_theme_builder', 'elementor_library', 'fl-builder-template', 'bricks_template' ),
+				'taxonomies' => array( 'layout_category', 'layout_type', 'scope', 'module_width', 'layout_pack', 'layout_tag', 'elementor_library_type', 'elementor_library_category' ),
+				'default'    => false,
+			),
+			'forms'       => array(
+				'label'      => __( 'Forms: Contact Form 7 and WPForms forms (the forms themselves, never entries)', 'livepull' ),
+				'post_types' => array( 'wpcf7_contact_form', 'wpforms' ),
+				'default'    => false,
+			),
+			'comments'    => array(
+				'label'   => __( 'Comments and product reviews (approved and awaiting approval, never spam)', 'livepull' ),
+				'default' => false,
+			),
+			'acf_options' => array(
+				'label'   => __( 'ACF options pages (site-wide fields your client edits)', 'livepull' ),
+				'options' => array( 'options_*', '_options_*' ),
+				'default' => true,
+			),
+		);
+	}
+
+	/** Which optional groups this site accepts: group => bool. */
+	public static function groups() {
+		$saved = get_option( 'livepull_groups', array() );
+		$out   = array();
+		foreach ( self::optional_groups() as $g => $def ) {
+			$out[ $g ] = isset( $saved[ $g ] ) ? (bool) $saved[ $g ] : $def['default'];
+		}
+		return $out;
+	}
+
+	public static function group_on( $group ) {
+		$g = self::groups();
+		return ! empty( $g[ $group ] );
+	}
+
+	public static function save_groups( array $on ) {
+		$out = array();
+		foreach ( array_keys( self::optional_groups() ) as $g ) {
+			$out[ $g ] = ! empty( $on[ $g ] );
+		}
+		update_option( 'livepull_groups', $out, false );
+	}
+
+	/** The optional group a post type, taxonomy or option name belongs to, or ''. */
+	public static function group_of( $kind, $name ) {
+		foreach ( self::optional_groups() as $g => $def ) {
+			if ( 'option' === $kind ) {
+				foreach ( isset( $def['options'] ) ? $def['options'] : array() as $pattern ) {
+					if ( fnmatch( $pattern, (string) $name ) ) {
+						return $g;
+					}
+				}
+			} elseif ( in_array( $name, isset( $def[ $kind ] ) ? $def[ $kind ] : array(), true ) ) {
+				return $g;
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Does this site want this incoming item? False for anything in an optional group that is
+	 * switched off here (it is skipped quietly, as if live hadn't sent it).
+	 */
+	public static function wanted( array $item ) {
+		$type = isset( $item['type'] ) ? $item['type'] : '';
+		if ( 'comment' === $type ) {
+			return self::group_on( 'comments' );
+		}
+		if ( ! empty( $item['deleted'] ) ) {
+			return true;
+		}
+		if ( 'post' === $type && isset( $item['post']['post_type'] ) ) {
+			$g = self::group_of( 'post_types', $item['post']['post_type'] );
+			if ( 'elementor_library' === $item['post']['post_type'] && isset( $item['meta']['_elementor_template_type'][0] ) && 'kit' === $item['meta']['_elementor_template_type'][0] ) {
+				return false; // Elementor's site kit is your design system: never pulled.
+			}
+		} elseif ( 'term' === $type && isset( $item['term']['taxonomy'] ) ) {
+			$g = self::group_of( 'taxonomies', $item['term']['taxonomy'] );
+		} elseif ( 'option' === $type && isset( $item['option']['name'] ) ) {
+			$g = self::group_of( 'option', $item['option']['name'] );
+		} else {
+			$g = '';
+		}
+		return '' === $g || self::group_on( $g );
+	}
+
+	/** Post types live records and sends (everything except internals; optional groups included). */
+	public static function recordable_post_type( $type ) {
+		return $type && ! in_array( $type, self::excluded_post_types( false ), true );
+	}
+
+	public static function recordable_taxonomy( $tax ) {
+		return $tax && ! in_array( $tax, self::excluded_taxonomies( false ), true );
+	}
+
+	/**
+	 * @param bool $local true: what this site accepts (optional groups switched off here are
+	 *                    excluded); false: what this site records and sends as a live site.
+	 */
+	public static function excluded_post_types( $local = true ) {
 		$defaults = array(
 			// Core internals and structure.
 			'revision', 'customize_changeset', 'oembed_cache', 'user_request',
@@ -83,38 +191,42 @@ final class LivePull_Config {
 			'wp_font_family', 'wp_font_face',
 			// ACF definitions (keep these in acf-json + Git).
 			'acf-field-group', 'acf-field', 'acf-post-type', 'acf-taxonomy', 'acf-ui-options-page',
-			// Divi library / Theme Builder.
-			'et_pb_layout', 'et_template', 'et_header_layout', 'et_body_layout', 'et_footer_layout', 'et_theme_builder',
-			// Elementor templates and kit.
-			'elementor_library', 'elementor_snippet', 'elementor_font', 'elementor_icons',
-			// Beaver Builder / Bricks templates.
-			'fl-builder-template', 'bricks_template',
+			// Elementor code snippets, custom fonts and icon sets.
+			'elementor_snippet', 'elementor_font', 'elementor_icons',
 			// WooCommerce orders and subscriptions (never copy customer orders).
 			'shop_order', 'shop_order_refund', 'shop_order_placehold', 'shop_subscription',
-			// Form definitions (config, not content).
-			'wpcf7_contact_form', 'wpforms',
 			// Background job queues.
 			'scheduled-action',
 		);
 		if ( ! self::pull_menus() ) {
 			$defaults[] = 'nav_menu_item';
 		}
+		if ( $local ) {
+			foreach ( self::optional_groups() as $g => $def ) {
+				if ( ! empty( $def['post_types'] ) && ! self::group_on( $g ) ) {
+					$defaults = array_merge( $defaults, $def['post_types'] );
+				}
+			}
+		}
 		$extra = defined( 'LIVEPULL_EXCLUDE_POST_TYPES' ) ? array_map( 'trim', explode( ',', LIVEPULL_EXCLUDE_POST_TYPES ) ) : array();
 		return array_values( array_unique( array_filter( apply_filters( 'livepull_excluded_post_types', array_merge( $defaults, $extra ) ) ) ) );
 	}
 
-	public static function excluded_taxonomies() {
+	public static function excluded_taxonomies( $local = true ) {
 		$defaults = array(
 			'link_category', 'wp_theme', 'wp_template_part_area',
-			// Divi library.
-			'layout_category', 'layout_type', 'scope', 'module_width', 'layout_pack', 'layout_tag',
-			// Elementor library.
-			'elementor_library_type', 'elementor_library_category',
 			// Action Scheduler.
 			'action-group',
 		);
 		if ( ! self::pull_menus() ) {
 			$defaults[] = 'nav_menu';
+		}
+		if ( $local ) {
+			foreach ( self::optional_groups() as $g => $def ) {
+				if ( ! empty( $def['taxonomies'] ) && ! self::group_on( $g ) ) {
+					$defaults = array_merge( $defaults, $def['taxonomies'] );
+				}
+			}
 		}
 		$extra = defined( 'LIVEPULL_EXCLUDE_TAXONOMIES' ) ? array_map( 'trim', explode( ',', LIVEPULL_EXCLUDE_TAXONOMIES ) ) : array();
 		return array_values( array_unique( array_filter( apply_filters( 'livepull_excluded_taxonomies', array_merge( $defaults, $extra ) ) ) ) );
@@ -149,6 +261,11 @@ final class LivePull_Config {
 			'site_icon'       => true,
 			'theme_mods_*'    => array( 'nav_menu_locations', 'custom_logo' ), // Menu locations + logo only.
 		);
+		// ACF options pages (site-wide fields): values are options_{name}, field references _options_{name}.
+		if ( function_exists( 'acf_get_field' ) ) {
+			$o['options_*']  = true;
+			$o['_options_*'] = true;
+		}
 		if ( ! self::pull_menus() ) {
 			$o['theme_mods_*'] = array( 'custom_logo' );
 		}
@@ -200,6 +317,18 @@ final class LivePull_Config {
 		);
 		if ( 0 === strpos( $name, 'theme_mods_' ) ) {
 			return array( 'nav_menu_locations' => 'term', 'custom_logo' => 'post' );
+		}
+		// ACF options-page fields holding post/term IDs (image, file, gallery, relationship…).
+		if ( 0 === strpos( $name, 'options_' ) && function_exists( 'acf_get_field' ) ) {
+			$field = acf_get_field( (string) get_option( '_' . $name ) );
+			if ( $field ) {
+				if ( in_array( $field['type'], array( 'image', 'file', 'gallery', 'post_object', 'page_link', 'relationship' ), true ) ) {
+					return apply_filters( 'livepull_option_refs', 'post', $name );
+				}
+				if ( 'taxonomy' === $field['type'] ) {
+					return apply_filters( 'livepull_option_refs', 'term', $name );
+				}
+			}
 		}
 		$r = isset( $refs[ $name ] ) ? $refs[ $name ] : null;
 		return apply_filters( 'livepull_option_refs', $r, $name );

@@ -35,12 +35,18 @@ final class LivePull_Puller {
 	}
 
 	public static function empty_report() {
-		return array( 'created' => array(), 'updated' => array(), 'deleted' => array(), 'conflicts' => array(), 'skipped' => array(), 'errors' => array(), 'files' => 0 );
+		return array( 'created' => array(), 'updated' => array(), 'deleted' => array(), 'conflicts' => array(), 'skipped' => array(), 'errors' => array(), 'held' => array(), 'files' => 0 );
 	}
 
 	public static function merge_report( array $into, array $r ) {
 		unset( $r['downloads'] );
-		foreach ( array( 'created', 'updated', 'deleted', 'skipped', 'errors' ) as $k ) {
+		foreach ( array( 'created', 'updated', 'deleted', 'skipped', 'errors', 'held' ) as $k ) {
+			if ( ! isset( $r[ $k ] ) ) {
+				continue;
+			}
+			if ( ! isset( $into[ $k ] ) ) {
+				$into[ $k ] = array();
+			}
 			$into[ $k ] = array_merge( $into[ $k ], $r[ $k ] );
 		}
 		$into['conflicts'] = array_merge( $into['conflicts'], $r['conflicts'] );
@@ -116,11 +122,15 @@ final class LivePull_Puller {
 	}
 
 	/**
-	 * @param array $opts dry_run, theirs, since (Y-m-d), from (int), skip_backup, redownload, url_replace, force
+	 * @param array $opts dry_run, theirs, since (Y-m-d), from (int), skip_backup, redownload, url_replace, force,
+	 *                    exclude (item keys to hold back this time), include_held (held keys to pull now),
+	 *                    source ('manual', 'cli' or 'scheduled', for the history)
 	 * @return array|WP_Error state
 	 */
 	public static function start( array $opts ) {
-		$opts  = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'since' => '', 'from' => null, 'skip_backup' => false, 'redownload' => false, 'url_replace' => true, 'force' => false ) );
+		$opts  = wp_parse_args( $opts, array( 'dry_run' => false, 'theirs' => false, 'since' => '', 'from' => null, 'skip_backup' => false, 'redownload' => false, 'url_replace' => true, 'force' => false, 'exclude' => array(), 'include_held' => array(), 'source' => 'manual' ) );
+		$opts['exclude']      = array_values( array_filter( array_map( 'strval', (array) $opts['exclude'] ) ) );
+		$opts['include_held'] = array_values( array_filter( array_map( 'strval', (array) $opts['include_held'] ) ) );
 		$since = trim( (string) $opts['since'] );
 		if ( '' !== $since && ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $since ) ) {
 			return new WP_Error( 'livepull_bad_date', 'Catch-up date must be YYYY-MM-DD.' );
@@ -156,7 +166,14 @@ final class LivePull_Puller {
 				: "This site's place in live's change list was out of step, so this pull checks everything changed on live since {$since} instead.";
 		}
 
+		// Held-back items: a preview lists them all (so they can be picked); a pull fetches the
+		// ones picked this time.
+		$held       = self::held();
+		$held_queue = $opts['dry_run'] ? array_keys( $held ) : array_values( array_intersect( $opts['include_held'], array_keys( $held ) ) );
+
 		return array(
+			'held_queue' => $held_queue,
+			'preview'    => array(),
 			'remote'  => $remote,
 			'mode'    => '' !== $since ? 'scan' : 'changes',
 			'since'   => $since,
@@ -188,7 +205,7 @@ final class LivePull_Puller {
 		}
 		$t0  = microtime( true );
 		$dry = (bool) $state['opts']['dry_run'];
-		$state += array( 'pending' => array(), 'downloads' => array(), 'dl_total' => 0, 'dl_done' => 0, 'page_open' => false, 'page_last_id' => 0, 'page_has_more' => false, 'activity' => '' );
+		$state += array( 'held_queue' => array(), 'preview' => array(), 'pending' => array(), 'downloads' => array(), 'dl_total' => 0, 'dl_done' => 0, 'page_open' => false, 'page_last_id' => 0, 'page_has_more' => false, 'activity' => '' );
 		$out = function () use ( $t0, $budget ) {
 			return $budget > 0 && ( microtime( true ) - $t0 ) >= $budget;
 		};
@@ -203,6 +220,9 @@ final class LivePull_Puller {
 					$state['activity'] = sprintf( 'Downloading media %d of %d', $state['dl_done'] + 1, $state['dl_total'] );
 					if ( $dest && ( ! file_exists( $dest ) || $state['opts']['redownload'] ) ) {
 						$res = $client->download( $f['url'], $dest );
+						if ( is_wp_error( $res ) && ! empty( $f['alt'] ) ) {
+							$res = $client->download( $f['alt'], $dest );
+						}
 						if ( is_wp_error( $res ) ) {
 							$state['report']['errors'][] = 'Media download failed: ' . $res->get_error_message();
 						} else {
@@ -219,7 +239,16 @@ final class LivePull_Puller {
 
 			// 2. Import the current page a few items at a time.
 			if ( $state['pending'] ) {
-				$chunk    = array_splice( $state['pending'], 0, 10 );
+				$chunk = self::filter_chunk( $state, array_splice( $state['pending'], 0, $dry ? 1 : 10 ) );
+				if ( ! $chunk ) {
+					continue;
+				}
+				if ( ! $dry && $state['backup'] ) {
+					$backup = self::ensure_backup( $state );
+					if ( is_wp_error( $backup ) ) {
+						return $backup;
+					}
+				}
 				$importer = new LivePull_Importer( self::client(), $state['remote'], array(
 					'dry_run'     => $dry,
 					'theirs'      => (bool) $state['opts']['theirs'],
@@ -227,7 +256,12 @@ final class LivePull_Puller {
 					'url_replace' => (bool) $state['opts']['url_replace'],
 					'defer_files' => true,
 				) );
-				$report          = $importer->run( $chunk );
+				$report = $importer->run( $chunk );
+				if ( $dry ) {
+					self::note_preview( $state, $chunk[0], $report );
+				} else {
+					self::release_held( $chunk );
+				}
 				$queued          = $report['downloads'];
 				$state['report'] = self::merge_report( $state['report'], $report );
 				$state['downloads'] = array_merge( $state['downloads'], $queued );
@@ -258,11 +292,42 @@ final class LivePull_Puller {
 				}
 			}
 
+			// 3b. Held-back items picked for this pull (or all of them, for a preview).
+			if ( $state['held_queue'] ) {
+				$client = self::client();
+				while ( $state['held_queue'] && ! $out() ) {
+					$key = array_shift( $state['held_queue'] );
+					list( $type, $sid ) = array_pad( explode( ':', $key, 2 ), 2, '' );
+					$state['activity'] = 'Fetching items held back earlier…';
+					$obj = $client->get( 'object', array( 'type' => $type, 'id' => $sid ) );
+					if ( is_wp_error( $obj ) ) {
+						if ( 'livepull_not_found' === $obj->get_error_code() || false !== strpos( $obj->get_error_message(), 'Not found' ) ) {
+							$obj = array( 'type' => $type, 'sync_id' => $sid, 'deleted' => true ); // Gone from live since.
+						} else {
+							$state['report']['errors'][] = 'Could not fetch held-back item: ' . $obj->get_error_message();
+							continue;
+						}
+					}
+					$obj['_held']       = true;
+					$state['pending'][] = $obj;
+				}
+				if ( $state['pending'] ) {
+					$state['pending'] = LivePull_Importer::sort_items( $state['pending'] );
+				}
+				if ( $out() ) {
+					break;
+				}
+				continue;
+			}
+
 			// 4. Fetch the next page.
 			$state['activity'] = 'Asking live for changes…';
 			$params = array( 'after' => $state['after'], 'limit' => LivePull_Config::page_size() );
 			if ( 'scan' === $state['mode'] ) {
 				$params['since'] = $state['since'];
+				if ( LivePull_Config::group_on( 'comments' ) ) {
+					$params['comments'] = 1;
+				}
 			}
 			$res = self::client()->get( $state['mode'], $params );
 			if ( is_wp_error( $res ) ) {
@@ -274,16 +339,6 @@ final class LivePull_Puller {
 			$state['page_last_id']  = (int) $res['last_id'];
 			$state['page_has_more'] = ! empty( $res['has_more'] );
 			if ( ! empty( $res['items'] ) ) {
-				if ( $state['backup'] ) {
-					$state['activity'] = 'Backing up the local database…';
-					$file = LivePull_Backup::create();
-					if ( is_wp_error( $file ) ) {
-						self::unlock( $state );
-						return new WP_Error( 'livepull_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
-					}
-					$state['backup']      = false;
-					$state['backup_file'] = $file;
-				}
 				$state['pending'] = LivePull_Importer::sort_items( $res['items'] );
 			}
 			if ( $out() ) {
@@ -299,6 +354,94 @@ final class LivePull_Puller {
 			self::finish( $state );
 		}
 		return $state;
+	}
+
+	/** Back up once, before the first change. @return true|WP_Error */
+	private static function ensure_backup( array &$state ) {
+		$state['activity'] = 'Backing up the local database…';
+		$file              = LivePull_Backup::create();
+		if ( is_wp_error( $file ) ) {
+			self::unlock( $state );
+			return new WP_Error( 'livepull_backup', 'Backup failed, so nothing was changed: ' . $file->get_error_message() );
+		}
+		$state['backup']      = false;
+		$state['backup_file'] = $file;
+		return true;
+	}
+
+	/* ============================================================ Held back */
+
+	const HELD = 'livepull_held';
+
+	/** Items skipped on purpose, waiting to be pulled later: key => label, group, time. */
+	public static function held() {
+		$h = get_option( self::HELD, array() );
+		return is_array( $h ) ? $h : array();
+	}
+
+	/** Remove items from the held-back list without pulling them ("forget"). */
+	public static function forget_held( array $keys ) {
+		$h = self::held();
+		foreach ( $keys as $k ) {
+			unset( $h[ $k ] );
+		}
+		update_option( self::HELD, $h, false );
+	}
+
+	/**
+	 * Drop items this pull must not apply, holding them back for later: anything unticked in
+	 * the preview, and anything already held unless it was picked this time.
+	 */
+	private static function filter_chunk( array &$state, array $chunk ) {
+		// Optional kinds of content switched off on this site: skipped quietly.
+		$chunk = array_values( array_filter( $chunk, array( 'LivePull_Config', 'wanted' ) ) );
+		if ( $state['opts']['dry_run'] ) {
+			return $chunk; // A preview shows everything else, held-back items included.
+		}
+		$held    = self::held();
+		$exclude = array_flip( $state['opts']['exclude'] );
+		$include = array_flip( $state['opts']['include_held'] );
+		$keep    = array();
+		$changed = false;
+		foreach ( $chunk as $item ) {
+			$key = ( isset( $item['type'] ) ? $item['type'] : '' ) . ':' . ( isset( $item['sync_id'] ) ? $item['sync_id'] : '' );
+			if ( isset( $exclude[ $key ] ) || ( isset( $held[ $key ] ) && ! isset( $include[ $key ] ) ) ) {
+				$d            = LivePull_Importer::describe( $item );
+				$held[ $key ] = array( 'label' => $d['label'], 'group' => $d['group'], 'time' => time() );
+				$changed      = true;
+				$state['report']['held'][] = $d['label'];
+				continue;
+			}
+			$keep[] = $item;
+		}
+		if ( $changed ) {
+			update_option( self::HELD, $held, false );
+		}
+		return $keep;
+	}
+
+	/** Pulled now: no longer held back. */
+	private static function release_held( array $chunk ) {
+		$held = self::held();
+		$n    = count( $held );
+		foreach ( $chunk as $item ) {
+			unset( $held[ $item['type'] . ':' . $item['sync_id'] ] );
+		}
+		if ( count( $held ) !== $n ) {
+			update_option( self::HELD, $held, false );
+		}
+	}
+
+	/** Preview: what this one item would do, for the pick list. */
+	private static function note_preview( array &$state, array $item, array $report ) {
+		$action = $report['conflicts'] ? 'conflict' : ( $report['created'] ? 'create' : ( $report['updated'] ? 'update' : ( $report['deleted'] ? 'delete' : '' ) ) );
+		if ( '' === $action ) {
+			return; // Nothing would change.
+		}
+		$d               = LivePull_Importer::describe( $item );
+		$d['action']     = $action;
+		$d['held']       = ! empty( $item['_held'] ) || isset( self::held()[ $d['key'] ] );
+		$state['preview'][ $d['key'] ] = $d;
 	}
 
 	/** Stop a pull (admin Cancel / Unlock). Progress up to the last finished batch is kept. */
@@ -324,6 +467,7 @@ final class LivePull_Puller {
 			if ( 'scan' === $state['mode'] && $state['since'] <= '2000-01-01' ) {
 				update_option( 'livepull_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
 			}
+			LivePull_History::add( 'pull', $state['report'], array( 'source' => $state['opts']['source'], 'backup' => $state['backup_file'] ) );
 			self::after_pull( $state['report'] );
 		}
 		self::unlock( $state );
@@ -385,7 +529,7 @@ final class LivePull_Puller {
 	/** Overwrite one local item with live's version. @return array|WP_Error report */
 	public static function take( $key ) {
 		list( $kind, $sid ) = array_pad( explode( ':', (string) $key, 2 ), 2, '' );
-		if ( ! in_array( $kind, array( 'post', 'term', 'option' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
+		if ( ! in_array( $kind, array( 'post', 'term', 'option', 'comment' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
 			return new WP_Error( 'livepull_bad_key', 'Unknown item.' );
 		}
 		$notices = array();
@@ -408,6 +552,84 @@ final class LivePull_Puller {
 		self::store_conflicts( $report );
 		self::after_pull( $report );
 		return $report;
+	}
+
+	/**
+	 * Live's version and this site's version of one item, field by field, for the side-by-side
+	 * view of a conflict. Live's addresses are switched to this site's first, so only real
+	 * differences show.
+	 *
+	 * @return array|WP_Error list of array( label, live, local ) rows.
+	 */
+	public static function compare( $key ) {
+		list( $kind, $sid ) = array_pad( explode( ':', (string) $key, 2 ), 2, '' );
+		if ( ! in_array( $kind, array( 'post', 'term', 'option', 'comment' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $sid ) ) {
+			return new WP_Error( 'livepull_bad_key', 'Unknown item.' );
+		}
+		$notices = array();
+		$remote  = self::connect( $notices, true );
+		if ( is_wp_error( $remote ) ) {
+			return $remote;
+		}
+		$obj = self::client()->get( 'object', array( 'type' => $kind, 'id' => $sid ) );
+		if ( is_wp_error( $obj ) ) {
+			return new WP_Error( 'livepull_gone', 'It no longer exists on live, so there is nothing to compare. Choose "Keep mine" to keep this site\'s version.' );
+		}
+		$imp  = new LivePull_Importer( self::client(), $remote, array( 'dry_run' => true ) );
+		$loc  = function ( $v ) use ( $imp ) {
+			return $imp->localise( $v );
+		};
+		$rows = array();
+		$add  = function ( $label, $live, $local ) use ( &$rows ) {
+			$rows[] = array( 'label' => $label, 'live' => (string) $live, 'local' => (string) $local );
+		};
+		if ( 'post' === $kind ) {
+			$map  = LivePull_Ids::map( 'post' );
+			$post = isset( $map[ $sid ] ) ? get_post( $map[ $sid ] ) : null;
+			$p    = $obj['post'];
+			$add( __( 'Title', 'livepull' ), $p['post_title'], $post ? $post->post_title : '' );
+			$add( __( 'Status', 'livepull' ), $p['post_status'], $post ? $post->post_status : '' );
+			$add( __( 'Slug', 'livepull' ), $p['post_name'], $post ? $post->post_name : '' );
+			$add( __( 'Date', 'livepull' ), $p['post_date'], $post ? $post->post_date : '' );
+			$add( __( 'Last edited', 'livepull' ), $p['post_modified'], $post ? $post->post_modified : '' );
+			$add( __( 'Excerpt', 'livepull' ), $loc( $p['post_excerpt'] ), $post ? $post->post_excerpt : '' );
+			$add( __( 'Content', 'livepull' ), $loc( $p['post_content'] ), $post ? $post->post_content : '' );
+			$local_meta = $post ? get_post_meta( $post->ID ) : array();
+			$shown      = 0;
+			foreach ( (array) $obj['meta'] as $mk => $vals ) {
+				if ( LivePull_Config::is_ignored_meta( $mk ) || 0 === strpos( $mk, '_edit_' ) || $shown >= 20 ) {
+					continue;
+				}
+				$live_v  = implode( "\n", array_map( $loc, array_map( 'strval', (array) $vals ) ) );
+				$local_v = isset( $local_meta[ $mk ] ) ? implode( "\n", array_map( 'strval', $local_meta[ $mk ] ) ) : '';
+				if ( $live_v !== $local_v ) {
+					/* translators: %s: custom field name */
+					$add( sprintf( __( 'Custom field: %s', 'livepull' ), $mk ), $live_v, $local_v );
+					$shown++;
+				}
+			}
+		} elseif ( 'term' === $kind ) {
+			$map  = LivePull_Ids::map( 'term' );
+			$term = isset( $map[ $sid ] ) ? get_term( $map[ $sid ] ) : null;
+			$term = ( $term && ! is_wp_error( $term ) ) ? $term : null;
+			$t    = $obj['term'];
+			$add( __( 'Name', 'livepull' ), $t['name'], $term ? $term->name : '' );
+			$add( __( 'Slug', 'livepull' ), $t['slug'], $term ? $term->slug : '' );
+			$add( __( 'Description', 'livepull' ), $loc( $t['description'] ), $term ? $term->description : '' );
+		} elseif ( 'comment' === $kind ) {
+			$map = LivePull_Ids::map( 'comment' );
+			$c   = isset( $map[ $sid ] ) ? get_comment( $map[ $sid ] ) : null;
+			$o   = $obj['comment'];
+			$add( __( 'Name', 'livepull' ), $o['comment_author'], $c ? $c->comment_author : '' );
+			$add( __( 'Email', 'livepull' ), $o['comment_author_email'], $c ? $c->comment_author_email : '' );
+			$add( __( 'Approved', 'livepull' ), $o['comment_approved'], $c ? $c->comment_approved : '' );
+			$add( __( 'Comment', 'livepull' ), $loc( $o['comment_content'] ), $c ? $c->comment_content : '' );
+		} else {
+			$name = $obj['option']['name'];
+			$live = $loc( LivePull_Payload::unserialize( $obj['option']['value'] ) );
+			$add( $name, is_scalar( $live ) ? $live : wp_json_encode( $live, JSON_PRETTY_PRINT ), is_scalar( get_option( $name ) ) ? get_option( $name ) : wp_json_encode( get_option( $name ), JSON_PRETTY_PRINT ) );
+		}
+		return $rows;
 	}
 
 	public static function keep( $key ) {

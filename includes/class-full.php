@@ -409,7 +409,7 @@ final class LivePull_Full {
 
 		// Settings that belong to THIS site and must survive the copy.
 		$keep = array();
-		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style' ) as $o ) {
+		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style', 'livepull_history', 'livepull_schedule', 'livepull_groups' ) as $o ) {
 			$v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $o ) );
 			if ( null !== $v ) {
 				$keep[ $o ] = $v;
@@ -509,6 +509,7 @@ final class LivePull_Full {
 					$state['done']     = true;
 					$state['activity'] = 'Finished';
 					delete_transient( LivePull_Puller::LOCK );
+					LivePull_History::add( 'copy', array( 'errors' => $state['errors'], 'files' => (int) $state['files_got'] ), array( 'backup' => isset( $state['backup_file'] ) ? $state['backup_file'] : '', 'note' => sprintf( '%d tables copied from live', count( $state['tables'] ) ) ) );
 				}
 				break;
 			}

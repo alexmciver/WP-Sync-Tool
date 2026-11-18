@@ -51,6 +51,10 @@ setup_site() { # dir db prefix port title
 		array( 'key' => 'field_t_related', 'name' => 'related', 'label' => 'Related', 'type' => 'relationship' ),
 		array( 'key' => 'field_t_topics', 'name' => 'topics', 'label' => 'Topics', 'type' => 'taxonomy', 'taxonomy' => 'category', 'field_type' => 'multi_select' ),
 	) ) );
+	acf_add_local_field_group( array( 'key' => 'group_t_opt', 'title' => 'Site options', 'location' => array( array( array( 'param' => 'options_page', 'operator' => '==', 'value' => 'site-options' ) ) ), 'fields' => array(
+		array( 'key' => 'field_t_opt_page', 'name' => 'footer_page', 'label' => 'Footer page', 'type' => 'post_object' ),
+		array( 'key' => 'field_t_opt_phone', 'name' => 'phone', 'label' => 'Phone', 'type' => 'text' ),
+	) ) );
 } );
 PHP
 	for pl in $(wp plugin list --path="$dir" --status=inactive --field=name 2>/dev/null); do
@@ -87,6 +91,7 @@ CODE=$(wp --path="$LIVE" livepull key | grep -o 'livepull1:[A-Za-z0-9+/=]*')
 $W_LIVE option update livepull_allow_full_copy always
 $W_LOCAL livepull connect "$CODE" >/dev/null
 wp --path="$LOCAL" livepull clone --yes --skip-files | tail -1
+$W_LOCAL livepull groups --on=templates,forms,comments,acf_options >/dev/null
 # After a copy, local's users are live's: same login (admin/admin).
 # Local-only content so new live items get DIFFERENT IDs here.
 for i in $(seq 1 25); do $W_LOCAL post create --post_title="Local only $i" --post_status=draft; done

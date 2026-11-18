@@ -44,6 +44,11 @@ final class LivePull_Logger {
 		}
 
 		// Pulled settings (site title, homepage, menu locations…).
+		// Comments and reviews (pulled only by sites that switch them on).
+		add_action( 'wp_insert_comment', array( __CLASS__, 'comment_saved' ), 999, 1 );
+		add_action( 'edit_comment', array( __CLASS__, 'comment_saved' ), 999, 1 );
+		add_action( 'wp_set_comment_status', array( __CLASS__, 'comment_saved' ), 999, 1 );
+		add_action( 'delete_comment', array( __CLASS__, 'comment_deleted' ), 1, 1 );
 		add_action( 'added_option', array( __CLASS__, 'option_added' ), 999, 2 );
 		add_action( 'updated_option', array( __CLASS__, 'option_updated' ), 999, 3 );
 		add_action( 'deleted_option', array( __CLASS__, 'option_deleted' ), 999 );
@@ -76,7 +81,7 @@ final class LivePull_Logger {
 	private static function post_loggable( $post ) {
 		return $post
 			&& 'auto-draft' !== $post->post_status
-			&& LivePull_Config::post_type_ok( $post->post_type );
+			&& LivePull_Config::recordable_post_type( $post->post_type );
 	}
 
 	public static function touch_post( $post_id ) {
@@ -138,6 +143,40 @@ final class LivePull_Logger {
 
 	/* -------------------------------------------------------------- Options */
 
+	/** Comments worth syncing: approved or awaiting approval, on content LivePull records. */
+	public static function comment_syncable( $c ) {
+		$c = get_comment( $c );
+		if ( ! $c || in_array( $c->comment_type, array( 'order_note', 'webhook_delivery', 'action_log', 'note' ), true ) ) {
+			return false;
+		}
+		$post = get_post( $c->comment_post_ID );
+		return $post && LivePull_Config::recordable_post_type( $post->post_type );
+	}
+
+	public static function comment_saved( $comment_id ) {
+		if ( self::$suspended ) {
+			return;
+		}
+		$c = get_comment( $comment_id );
+		if ( ! $c || ! self::comment_syncable( $c ) ) {
+			return;
+		}
+		$sid = LivePull_Ids::for_comment( $c->comment_ID );
+		// Spam and trash count as gone; approving or un-approving keeps it.
+		$gone = in_array( (string) $c->comment_approved, array( 'spam', 'trash', 'post-trashed' ), true );
+		self::write( 'comment', $sid, (int) $c->comment_ID, $gone ? 'delete' : 'upsert' );
+	}
+
+	public static function comment_deleted( $comment_id ) {
+		if ( self::$suspended ) {
+			return;
+		}
+		$sid = LivePull_Ids::for_comment( $comment_id, false );
+		if ( $sid ) {
+			self::write( 'comment', $sid, (int) $comment_id, 'delete' );
+		}
+	}
+
 	public static function option_added( $name, $value ) {
 		if ( ! self::$suspended && null !== LivePull_Config::option_spec( $name ) ) {
 			self::write( 'option', LivePull_Config::option_sid( $name ), 0, 'upsert' );
@@ -188,7 +227,7 @@ final class LivePull_Logger {
 			return;
 		}
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::recordable_taxonomy( $term->taxonomy ) ) {
 			return;
 		}
 		self::write( 'term', LivePull_Ids::for_term( $term->term_id ), $term->term_id, 'upsert' );
@@ -199,7 +238,7 @@ final class LivePull_Logger {
 			return;
 		}
 		$term = get_term( $term_id );
-		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::taxonomy_ok( $term->taxonomy ) ) {
+		if ( ! $term || is_wp_error( $term ) || ! LivePull_Config::recordable_taxonomy( $term->taxonomy ) ) {
 			return;
 		}
 		$sid = LivePull_Ids::for_term( $term->term_id, false ) ?: LivePull_Ids::term_formula( $term->term_id, $term->taxonomy, $term->slug );

@@ -42,6 +42,11 @@ final class LivePull_Refs {
 			$known['_yoast_wpseo_twitter-image-id']   = 'post';
 			$known['rank_math_primary_category']      = 'term';
 			$known['_rank_math_facebook_image_id']    = 'post';
+			// Divi Theme Builder: a template's header/body/footer layouts, and the builder's templates.
+			$known['_et_header_layout_id'] = 'post';
+			$known['_et_body_layout_id']   = 'post';
+			$known['_et_footer_layout_id'] = 'post';
+			$known['_et_template']         = 'post';
 		}
 		foreach ( $known as $k => $kind ) {
 			if ( isset( $meta[ $k ] ) ) {
@@ -195,6 +200,16 @@ final class LivePull_Refs {
 				$content
 			);
 
+			// Forms and templates by ID: [contact-form-7 id="12"], [wpforms id="12"],
+			// [elementor-template id="12"], [fl_builder_insert_layout id="12"].
+			$content = preg_replace_callback(
+				'/(\[(?:contact-form-7|wpforms|elementor-template|fl_builder_insert_layout)\b[^\]]*?\bid=["\']?)(\d+)/',
+				function ( $m ) use ( $cb ) {
+					return $m[1] . (int) $cb( 'post', (int) $m[2] );
+				},
+				$content
+			);
+
 			// [gallery ids="1,2,3"], [gallery include="..."], Divi [et_pb_gallery gallery_ids="..."].
 			$content = preg_replace_callback(
 				'/(\[(?:gallery|et_pb_gallery)\b[^\]]*?\b(?:ids|include|exclude|gallery_ids)=["\'])([\d,\s]+)(["\'])/',
@@ -251,8 +266,19 @@ final class LivePull_Refs {
 					return $m[0];
 				}
 				if ( ! $is_core ) {
-					// Third-party blocks (Spectra, Kadence, GenerateBlocks, Divi 5, ACF blocks…): generic rules.
 					$changed = false;
+					// Form blocks that store the form's post ID.
+					$known = array(
+						'contact-form-7/contact-form-selector' => 'id',
+						'wpforms/form-selector'                => 'formId',
+					);
+					if ( isset( $known[ $m[1] ], $attrs[ $known[ $m[1] ] ] ) && is_numeric( $attrs[ $known[ $m[1] ] ] ) ) {
+						$old                       = $attrs[ $known[ $m[1] ] ];
+						$new                       = (int) $cb( 'post', (int) $old );
+						$attrs[ $known[ $m[1] ] ] = is_string( $old ) ? (string) $new : $new;
+						$changed                   = (string) $new !== (string) $old;
+					}
+					// Third-party blocks (Spectra, Kadence, GenerateBlocks, Divi 5, ACF blocks…): generic rules.
 					$attrs   = self::walk_structure( $attrs, $cb, $m[1], $changed );
 					return $changed ? '<!-- wp:' . $m[1] . ' ' . serialize_block_attributes( $attrs ) . ' ' . ( isset( $m[3] ) ? $m[3] : '' ) . '-->' : $m[0];
 				}
@@ -366,6 +392,9 @@ final class LivePull_Refs {
 				}
 				if ( ! $hit && $siteorigin && in_array( $k, array( 'image', 'attachment_id', 'image_id', 'background_image_attachment', 'image_fallback_id', 'icon_image' ), true ) ) {
 					$hit = true;
+				}
+				if ( ! $hit && 'template_id' === $k && '_elementor_data' === $field ) {
+					$hit = true; // Elementor "Template" widget: the saved template it shows.
 				}
 				if ( $hit ) {
 					$arr[ $k ] = $map( $v );

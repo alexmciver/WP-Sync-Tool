@@ -45,6 +45,14 @@ jobs:
         if: steps.exists.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
         run: bin/build.sh
 
+      # Every download is signed so the plugin's updater can tell it really came from here.
+      # Needs the repository secret LIVEPULL_SIGNING_KEY (Settings → Secrets → Actions).
+      - name: Sign
+        if: steps.exists.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          LIVEPULL_SIGNING_KEY: ${{ secrets.LIVEPULL_SIGNING_KEY }}
+        run: php bin/sign.php dist/*.zip
+
       - name: Publish GitHub release
         if: steps.exists.outputs.skip != 'true'
         env:
@@ -54,7 +62,7 @@ jobs:
           awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > changes.txt
           [ -s changes.txt ] || git log -1 --format=%B > changes.txt
           { cat .github/release-header.md; echo; cat changes.txt; } > notes.txt
-          gh release create "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 \
+          gh release create "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 dist/*.sig \
             --title "LivePull ${{ steps.v.outputs.version }}" \
             --notes-file notes.txt
 
@@ -68,7 +76,7 @@ jobs:
         run: |
           awk -v v="## ${{ steps.v.outputs.version }}" 'index($0,v)==1{f=1;next} /^## /{if(f)exit} f' CHANGELOG.md > changes.txt
           { cat .github/release-header.md; echo; cat changes.txt; } > notes.txt
-          gh release upload "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 --clobber
+          gh release upload "v${{ steps.v.outputs.version }}" dist/*.zip dist/*.sha256 dist/*.sig --clobber
           gh release edit "v${{ steps.v.outputs.version }}" --notes-file notes.txt
 
       - name: Check for WordPress.org credentials

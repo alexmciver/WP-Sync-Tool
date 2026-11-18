@@ -178,7 +178,13 @@
 			list( __( 'Errors', 'livepull' ), r.errors, 'is-error' )
 		].forEach( function ( n ) { if ( n ) { result.appendChild( n ); } } );
 
-		if ( d.dry && total ) {
+		if ( d.dry && d.preview && d.preview.length ) {
+			// Replace the plain lists with a pick list.
+			Array.prototype.slice.call( result.querySelectorAll( '.livepull-list' ) ).forEach( function ( x ) {
+				if ( ! x.classList.contains( 'is-error' ) ) { x.parentNode.removeChild( x ); }
+			} );
+			result.appendChild( picker( d.preview ) );
+		} else if ( d.dry && total ) {
 			var p = el( 'p' );
 			var b = el( 'button', 'button button-primary', __( 'Pull these changes now', 'livepull' ) );
 			b.type = 'button';
@@ -186,6 +192,123 @@
 			p.appendChild( b );
 			result.appendChild( p );
 		}
+		if ( ! d.dry && r.held && r.held.length ) {
+			var hl = list( __( 'Held back for later (pull them from a preview whenever you like)', 'livepull' ), r.held, 'is-warn' );
+			if ( hl ) { result.appendChild( hl ); }
+		}
+	}
+
+	/**
+	 * Preview pick list: every change with a tick box, grouped by what would happen, with
+	 * one-click filters by kind (Pages, Products, Settings…). Unticked items are held back
+	 * and offered again in later previews; items held back earlier start unticked.
+	 */
+	function picker( items ) {
+		var wrap = el( 'div', 'livepull-picker' );
+		var actions = [
+			[ 'create', __( 'New on live', 'livepull' ) ],
+			[ 'update', __( 'Changed on live', 'livepull' ) ],
+			[ 'delete', __( 'Deleted on live', 'livepull' ) ],
+			[ 'conflict', __( 'Changed in both places (decide under Conflicts after pulling)', 'livepull' ) ]
+		];
+		var groups = {};
+		items.forEach( function ( i ) { groups[ i.group ] = ( groups[ i.group ] || 0 ) + 1; } );
+
+		var filters = el( 'p', 'livepull-picker-filters' );
+		filters.appendChild( el( 'strong', '', __( 'Include:', 'livepull' ) + ' ' ) );
+		Object.keys( groups ).sort().forEach( function ( g ) {
+			var lab = el( 'label', 'livepull-chip' );
+			var cb = el( 'input' );
+			cb.type = 'checkbox';
+			cb.checked = true;
+			cb.addEventListener( 'change', function () {
+				wrap.querySelectorAll( 'input[data-group]' ).forEach( function ( x ) {
+					if ( x.getAttribute( 'data-group' ) === g && ! x.disabled ) { x.checked = cb.checked; }
+				} );
+				count();
+			} );
+			lab.appendChild( cb );
+			lab.appendChild( document.createTextNode( ' ' + g + ' (' + groups[ g ] + ')' ) );
+			filters.appendChild( lab );
+		} );
+		wrap.appendChild( filters );
+
+		function section( title, list, held ) {
+			if ( ! list.length ) { return; }
+			var det = el( 'details', 'livepull-list' + ( held ? ' is-warn' : '' ) );
+			det.open = list.length <= 30;
+			var sum = el( 'summary' );
+			var all = el( 'input' );
+			all.type = 'checkbox';
+			all.checked = ! held;
+			all.addEventListener( 'click', function ( e ) { e.stopPropagation(); } );
+			all.addEventListener( 'change', function () {
+				det.querySelectorAll( 'input[data-key]' ).forEach( function ( x ) { if ( ! x.disabled ) { x.checked = all.checked; } } );
+				count();
+			} );
+			sum.appendChild( all );
+			sum.appendChild( document.createTextNode( ' ' + title + ' (' + list.length + ')' ) );
+			det.appendChild( sum );
+			var ul = el( 'ul' );
+			list.forEach( function ( i ) {
+				var li = el( 'li' );
+				var lab = el( 'label' );
+				var cb = el( 'input' );
+				cb.type = 'checkbox';
+				cb.setAttribute( 'data-key', i.key );
+				cb.setAttribute( 'data-group', i.group );
+				if ( held ) { cb.setAttribute( 'data-held', '1' ); }
+				cb.checked = ! held && i.action !== 'conflict';
+				cb.disabled = i.action === 'conflict';
+				cb.addEventListener( 'change', count );
+				lab.appendChild( cb );
+				lab.appendChild( document.createTextNode( ' ' + i.label + ' ' ) );
+				lab.appendChild( el( 'span', 'livepull-tag', i.group ) );
+				li.appendChild( lab );
+				ul.appendChild( li );
+			} );
+			det.appendChild( ul );
+			wrap.appendChild( det );
+		}
+		actions.forEach( function ( a ) {
+			section( a[ 1 ], items.filter( function ( i ) { return i.action === a[ 0 ] && ! i.held; } ), false );
+		} );
+		var held = items.filter( function ( i ) { return i.held && i.action !== 'conflict'; } );
+		section( __( 'Held back from earlier pulls (tick to pull them now)', 'livepull' ), held, true );
+
+		var bar = el( 'p', 'livepull-picker-actions' );
+		var go = el( 'button', 'button button-primary' );
+		go.type = 'button';
+		bar.appendChild( go );
+		if ( held.length ) {
+			var forget = el( 'button', 'button-link', __( 'Forget the held-back items', 'livepull' ) );
+			forget.type = 'button';
+			forget.addEventListener( 'click', function () {
+				post( 'livepull_forget_held', { keys: JSON.stringify( held.map( function ( i ) { return i.key; } ) ) } ).then( function () {
+					forget.disabled = true;
+					forget.textContent = __( 'Forgotten. They will only come back if they change on live again.', 'livepull' );
+				} );
+			} );
+			bar.appendChild( document.createTextNode( ' ' ) );
+			bar.appendChild( forget );
+		}
+		bar.appendChild( el( 'span', 'description', ' ' + __( 'Unticked items are held back, not lost: they are offered again next time. Anything a pulled item needs (such as its images) still comes across.', 'livepull' ) ) );
+		wrap.appendChild( bar );
+
+		function count() {
+			var boxes = Array.prototype.slice.call( wrap.querySelectorAll( 'input[data-key]' ) ).filter( function ( x ) { return ! x.disabled; } );
+			var picked = boxes.filter( function ( x ) { return x.checked; } ).length;
+			go.textContent = __( 'Pull selected', 'livepull' ) + ' (' + picked + ')';
+			go.disabled = picked === 0;
+		}
+		go.addEventListener( 'click', function () {
+			var boxes = Array.prototype.slice.call( wrap.querySelectorAll( 'input[data-key]' ) ).filter( function ( x ) { return ! x.disabled; } );
+			var exclude = boxes.filter( function ( x ) { return ! x.checked && ! x.getAttribute( 'data-held' ); } ).map( function ( x ) { return x.getAttribute( 'data-key' ); } );
+			var include = boxes.filter( function ( x ) { return x.checked && x.getAttribute( 'data-held' ); } ).map( function ( x ) { return x.getAttribute( 'data-key' ); } );
+			run( false, { exclude: JSON.stringify( exclude ), include_held: JSON.stringify( include ) } );
+		} );
+		count();
+		return wrap;
 	}
 
 	var lastActivity = '', lastCounts = '', startedAt = 0, ticker = null;
@@ -214,7 +337,7 @@
 		}
 	}
 
-	function run( dry ) {
+	function run( dry, extra ) {
 		if ( running ) { return; }
 		if ( ! dry && $( '#livepull-theirs' ).checked && ! window.confirm( __( 'Live will overwrite your local edits wherever both changed. Continue?', 'livepull' ) ) ) { return; }
 		running = true;
@@ -240,6 +363,7 @@
 			since: $( '#livepull-since' ).value || '',
 			all: $( '#livepull-all' ).checked ? 1 : ''
 		};
+		Object.keys( extra || {} ).forEach( function ( k ) { params[ k ] = extra[ k ]; } );
 
 		function next( p ) {
 			if ( cancelled ) { var e = new Error( __( 'Cancelled.', 'livepull' ) ); e.code = 'cancelled'; return Promise.reject( e ); }
@@ -300,6 +424,33 @@
 	btnPull.addEventListener( 'click', function () { run( false ); } );
 
 	/* ------------------------------------------------------------- Conflicts */
+
+	// Side-by-side comparison under the conflict's row.
+	document.addEventListener( 'click', function ( e ) {
+		var btn = e.target.closest( '.livepull-compare-btn' );
+		if ( ! btn ) { return; }
+		var row = btn.closest( 'tr' );
+		var next = row.nextElementSibling;
+		if ( next && next.classList.contains( 'livepull-compare-row' ) ) {
+			next.parentNode.removeChild( next );
+			btn.textContent = __( 'Compare', 'livepull' );
+			return;
+		}
+		btn.disabled = true;
+		btn.textContent = __( 'Loading…', 'livepull' );
+		post( 'livepull_compare', { key: row.getAttribute( 'data-key' ) } ).then( function ( d ) {
+			var tr = el( 'tr', 'livepull-compare-row' );
+			var td = el( 'td' );
+			td.colSpan = row.children.length;
+			td.innerHTML = d.html; // Built and sanitised (wp_kses_post) on the server.
+			tr.appendChild( td );
+			row.parentNode.insertBefore( tr, row.nextSibling );
+			btn.textContent = __( 'Hide comparison', 'livepull' );
+		} ).catch( function ( err ) {
+			btn.textContent = __( 'Compare', 'livepull' );
+			window.alert( err.message );
+		} ).then( function () { btn.disabled = false; } );
+	} );
 
 	document.addEventListener( 'click', function ( e ) {
 		var take = e.target.closest( '.livepull-take' );
