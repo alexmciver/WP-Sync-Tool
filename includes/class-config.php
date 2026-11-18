@@ -61,6 +61,16 @@ final class LivePull_Config {
 		return strlen( $key ) >= 8 ? '…' . substr( $key, -4 ) : '(none)';
 	}
 
+	/**
+	 * A message made safe to keep or share (history, emails, bug reports): addresses lose
+	 * their query strings (signed CDN/S3 links carry credentials there) and key endings
+	 * are hidden.
+	 */
+	public static function scrub( $text ) {
+		$text = preg_replace( '#\b(https?://[^\s?"\'<>]+)\?[^\s"\'<>]*#i', '$1?…', (string) $text );
+		return preg_replace( '/(key ending|ends in|ending)\s*…?[A-Za-z0-9+\/=]{4}\b/iu', '$1 ****', $text );
+	}
+
 	public static function page_size() {
 		return defined( 'LIVEPULL_PAGE_SIZE' ) ? max( 1, min( 200, (int) LIVEPULL_PAGE_SIZE ) ) : 50;
 	}
@@ -70,11 +80,6 @@ final class LivePull_Config {
 		return $wpdb->prefix . 'livepull_log';
 	}
 
-	/**
-	 * Post types that are never synced. These are either site structure/config
-	 * (owned by the developer, deployed separately) or data that should never be
-	 * copied around (orders).
-	 */
 	/**
 	 * Optional kinds of content. Live always records them; each local site chooses whether to
 	 * accept them (Tools → LivePull → Settings).
@@ -88,18 +93,18 @@ final class LivePull_Config {
 				'default'    => false,
 			),
 			'forms'       => array(
-				'label'      => __( 'Forms: Contact Form 7 and WPForms forms (the forms themselves, never entries)', 'livepull' ),
+				'label'      => __( 'Forms: Contact Form 7 and WPForms forms, never entries. Their settings come too, including who they email, so test messages from this site go to those addresses.', 'livepull' ),
 				'post_types' => array( 'wpcf7_contact_form', 'wpforms' ),
 				'default'    => false,
 			),
 			'comments'    => array(
-				'label'   => __( 'Comments and product reviews (approved and awaiting approval, never spam)', 'livepull' ),
+				'label'   => __( 'Comments and product reviews: approved and awaiting approval, never spam. Commenters\' names and email addresses come too; their IP addresses never do.', 'livepull' ),
 				'default' => false,
 			),
 			'acf_options' => array(
-				'label'   => __( 'ACF options pages (site-wide fields your client edits)', 'livepull' ),
+				'label'   => __( 'ACF options pages: site-wide fields your client edits. These sometimes hold API keys or tracking scripts, which would then run on this site too.', 'livepull' ),
 				'options' => array( 'options_*', '_options_*' ),
-				'default' => true,
+				'default' => false,
 			),
 		);
 	}
@@ -147,6 +152,14 @@ final class LivePull_Config {
 	 * Does this site want this incoming item? False for anything in an optional group that is
 	 * switched off here (it is skipped quietly, as if live hadn't sent it).
 	 */
+	/**
+	 * Comment fields that hold the commenter's IP address, browser or spam-check history
+	 * (Akismet, Antispam Bee and similar). Never sent or saved by a pull.
+	 */
+	public static function is_private_comment_meta( $key ) {
+		return (bool) preg_match( '/akismet|antispam|spam|(^|_)ip($|_)|ip_address|user_?agent|remote_addr/i', (string) $key );
+	}
+
 	public static function wanted( array $item ) {
 		$type = isset( $item['type'] ) ? $item['type'] : '';
 		if ( 'comment' === $type ) {
@@ -180,6 +193,10 @@ final class LivePull_Config {
 	}
 
 	/**
+	 * Post types that are never synced. These are either site structure/config
+	 * (owned by the developer, deployed separately) or data that should never be
+	 * copied around (orders).
+	 *
 	 * @param bool $local true: what this site accepts (optional groups switched off here are
 	 *                    excluded); false: what this site records and sends as a live site.
 	 */
@@ -277,7 +294,6 @@ final class LivePull_Config {
 		return apply_filters( 'livepull_pulled_options', $o );
 	}
 
-	/** @return true|array|null how an option is pulled (whole / sub-keys), or null if it isn't. */
 	/**
 	 * Settings that are never pulled, whatever the configuration or filters say: they control
 	 * the site's address, who can log in, which code runs, or LivePull's own connection.
@@ -298,6 +314,7 @@ final class LivePull_Config {
 		return ! self::option_forbidden( $name ) && null !== self::option_spec( $name );
 	}
 
+	/** @return true|array|null how an option is pulled (whole / sub-keys), or null if it isn't. */
 	public static function option_spec( $name ) {
 		foreach ( self::pulled_options() as $pattern => $spec ) {
 			if ( $pattern === $name || ( false !== strpos( $pattern, '*' ) && fnmatch( $pattern, $name ) ) ) {

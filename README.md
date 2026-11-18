@@ -12,7 +12,7 @@ You're building or fixing something on a local or staging copy. Meanwhile the cl
 - **Copy everything from live** – a full database + uploads copy when you want to start fresh, with URLs rewritten safely.
 - **Undo** – a backup is taken before every pull and copy; restore from the dashboard.
 - **Works from WordPress or the terminal** – *Tools → LivePull*, or `wp livepull` (WP-CLI).
-- **Read-only on live** – nothing is ever written to the live site.
+- **Never changes your live content or settings** – on live, LivePull only keeps its own small change log and ID tags.
 
 > LivePull is tested end to end on every change (see [Tested with](#tested-with)), but every site is different. It backs up your local site before every pull, and it's worth trying it on a copy first. See [Limitations](#limitations).
 
@@ -75,9 +75,9 @@ The status line at the top says where things stand, e.g. *Connected to client.co
 Optional, switched on under **Settings → What to pull** (or `wp livepull groups --on=…`):
 
 - **Page-builder templates** – Divi Library and Theme Builder, Elementor, Beaver Builder and Bricks templates. Elementor's site kit is never pulled.
-- **Forms** – Contact Form 7 and WPForms forms (not entries). Form shortcodes and blocks point at the local form.
-- **Comments and reviews** – approved and awaiting approval, with replies kept together. Never spam, and never commenters' IP addresses.
-- **ACF options pages** – on by default.
+- **Forms** – Contact Form 7 and WPForms forms (not entries), including who they email, so test submissions from your copy reach those addresses. Form shortcodes and blocks point at the local form.
+- **Comments and reviews** – approved and awaiting approval, with replies kept together. Commenters' names and emails come across; spam, IP addresses and anti-spam data never do, and live only sends comments to sites that pull them.
+- **ACF options pages** – these sometimes hold API keys or tracking scripts, so they're off until you switch them on.
 
 IDs that point at other content are re-pointed to the matching local items – featured images, galleries, ACF image/relationship/taxonomy fields, Gutenberg blocks, `[gallery]`, Divi galleries, WooCommerce galleries/upsells, Elementor data, menu items, homepage setting. Live URLs are rewritten to your local URL.
 

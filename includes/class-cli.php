@@ -262,6 +262,11 @@ class LivePull_CLI {
 		if ( \WP_CLI\Utils\get_flag_value( $assoc, 'run-now' ) ) {
 			$r = LivePull_Schedule::run();
 			$s = LivePull_Schedule::settings();
+			if ( is_wp_error( $r ) ) {
+				WP_CLI::warning( 'Scheduled pull didn\'t run: ' . $r->get_error_message() );
+			} else {
+				WP_CLI::log( 'Scheduled pull ran: ' . $s['last_result'] );
+			}
 		}
 		$next = LivePull_Schedule::next();
 		WP_CLI::log( 'Scheduled pulls: ' . LivePull_Schedule::choices()[ $s['every'] ] . ( $s['email'] ? ', with email summaries' : '' ) );
@@ -466,13 +471,19 @@ class LivePull_CLI {
 			WP_CLI::error( 'Backup not found. Run `wp livepull backups` to list them.' );
 		}
 		WP_CLI::confirm( 'Restore ' . basename( $file ) . '? Everything pulled or edited since then will be undone.', $assoc );
+		$lock = LivePull_Puller::lock_acquire( 'restore' );
+		if ( '' === $lock ) {
+			WP_CLI::error( 'A pull or copy is running. Wait for it to finish, then try again.' );
+		}
 		$now = LivePull_Backup::create( 0 === strpos( basename( $file ), 'pre-copy-' ), $file );
 		if ( is_wp_error( $now ) ) {
+			LivePull_Puller::lock_release( $lock );
 			WP_CLI::error( 'Could not back up the current state first, so nothing was restored: ' . $now->get_error_message() );
 		}
 		WP_CLI::log( 'Current state backed up first: ' . basename( $now ) );
-		$res = LivePull_Backup::restore( $file );
+		$res = LivePull_Backup::restore( $file ); // Clears the lock when it finishes.
 		if ( is_wp_error( $res ) ) {
+			LivePull_Puller::lock_release( $lock );
 			WP_CLI::error( $res->get_error_message() );
 		}
 		WP_CLI::success( 'Restored ' . basename( $file ) . '.' );

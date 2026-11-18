@@ -15,7 +15,8 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Backup {
 
-	const KEEP = 10;
+	const KEEP      = 10;
+	const KEEP_COPY = 3;
 
 	/**
 	 * Where backups live. Outside the public web folder when possible (e.g. the folder above
@@ -144,6 +145,15 @@ final class LivePull_Backup {
 	/** @return string|WP_Error Backup file path. */
 	public static function create( $full = false, $keep = '' ) {
 		$dir = self::dir();
+
+		// Don't fill the disk: need room for about twice the last backup (it's written, then
+		// an old one is removed), plus a margin.
+		$last = self::all();
+		$need = ( $last ? 2 * (int) $last[0]['size'] : 0 ) + 50 * MB_IN_BYTES;
+		$free = function_exists( 'disk_free_space' ) ? @disk_free_space( $dir ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- disabled on some hosts.
+		if ( false !== $free && $free < $need ) {
+			return new WP_Error( 'livepull_disk', sprintf( 'Not enough free disk space for a backup (%1$s free, about %2$s needed), so nothing was changed. Free up space or delete old backups in %3$s.', size_format( $free ), size_format( $need ), $dir ) );
+		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
 			$file   = $dir . '/' . self::new_name( $full, false );
@@ -330,12 +340,20 @@ final class LivePull_Backup {
 	}
 
 	/** Keep the newest backups, plus $keep (the backup about to be restored). */
+	/**
+	 * Keep the newest backups of each kind separately: KEEP before pulls, KEEP_COPY before
+	 * full copies. Frequent (e.g. hourly scheduled) pulls then never push out the backup
+	 * taken before the last Copy everything.
+	 */
 	private static function prune( $keep = '' ) {
-		$all = array_values( array_filter( self::all(), function ( $b ) use ( $keep ) {
-			return ! $keep || wp_normalize_path( $b['file'] ) !== wp_normalize_path( $keep );
-		} ) );
-		foreach ( array_slice( $all, $keep ? self::KEEP - 1 : self::KEEP ) as $b ) {
-			wp_delete_file( $b['file'] );
+		foreach ( array( 'pull' => self::KEEP, 'copy' => self::KEEP_COPY ) as $kind => $max ) {
+			$all = array_values( array_filter( self::all(), function ( $b ) use ( $keep, $kind ) {
+				return $kind === $b['kind'] && ( ! $keep || wp_normalize_path( $b['file'] ) !== wp_normalize_path( $keep ) );
+			} ) );
+			$protected = $keep && 0 === strpos( basename( $keep ), 'pre-' . $kind . '-' );
+			foreach ( array_slice( $all, $protected ? $max - 1 : $max ) as $b ) {
+				wp_delete_file( $b['file'] );
+			}
 		}
 	}
 
@@ -459,8 +477,11 @@ final class LivePull_Backup {
 		if ( $error ) {
 			return new WP_Error( 'livepull_restore', 'Restore stopped with a database error, so nothing was changed: ' . $error );
 		}
-		// Backups are taken at the start of a pull, so they contain that pull's lock.
+		// Backups are taken at the start of a pull, so they contain that pull's lock (old
+		// transient style, or the lock row). Nothing restored is running: clear both.
 		delete_transient( 'livepull_lock' );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", LivePull_Puller::LOCK ) );
+		wp_cache_delete( LivePull_Puller::LOCK, 'options' );
 		// The history describes this site's past, so it isn't wound back with the database.
 		update_option( LivePull_History::OPTION, $history, false );
 		LivePull_History::add( 'restore', array(), array( 'note' => basename( $file ) ) );

@@ -41,7 +41,7 @@ Never copied: WooCommerce orders, logged-in sessions, and theme or plugin files 
 
 = How it connects =
 
-LivePull only talks to the live site you connect it to. Install it on both sites and copy the connection code from the live site into the local one. The connection code contains a secret key. Live only answers requests that carry that key, it only ever sends data (it can't be changed from outside), and it never sends anything to any other service.
+LivePull only talks to the live site you connect it to. Install it on both sites and copy the connection code from the live site into the local one. The connection code contains a secret key. Live only answers requests that carry that key, requests to live can only read (they can't change anything there), and it never sends anything to any other service.
 
 = Testing =
 
@@ -68,7 +68,7 @@ It's listed as a conflict and nothing is overwritten. Click **Compare** to see t
 
 = Does it change anything on the live site? =
 
-No. On live, LivePull records which content changed and answers read-only requests from your local site.
+It never changes your live content or settings. On live, LivePull keeps its own change log table, a hidden ID on each post, term and comment so the two sites can match them up, and a daily task that trims the log. Requests from your local site can only read.
 
 = Something was edited on live but "Nothing to pull" =
 

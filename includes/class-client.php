@@ -72,7 +72,9 @@ final class LivePull_Client {
 			}
 			if ( 200 !== $code ) {
 				$msg = isset( $body['message'] ) ? $body['message'] : 'HTTP ' . $code;
-				return new WP_Error( 'livepull_http_' . $code, $msg, array( 'status' => $code, 'url' => $url ) );
+				// Keep LivePull's own reason from live (e.g. "not found", "list expired") so callers can act on it.
+				$err = isset( $body['code'] ) && is_string( $body['code'] ) && preg_match( '/^livepull_[a-z0-9_]+$/', $body['code'] ) ? $body['code'] : 'livepull_http_' . $code;
+				return new WP_Error( $err, $msg, array( 'status' => $code, 'url' => $url ) );
 			}
 			update_option( 'livepull_remote_url_style', $style, false );
 			return $body;
@@ -128,7 +130,7 @@ final class LivePull_Client {
 		$code = wp_remote_retrieve_response_code( $res );
 		if ( 200 !== $code ) {
 			@unlink( $tmp ); // phpcs:ignore
-			return new WP_Error( 'livepull_download', 'HTTP ' . $code . ' for ' . $url );
+			return new WP_Error( 'livepull_download', 'HTTP ' . $code . ' for ' . LivePull_Config::scrub( $url ) );
 		}
 		return LivePull_Config::fs()->move( $tmp, $dest, true ) ? true : new WP_Error( 'livepull_download', 'Could not write ' . $dest );
 	}

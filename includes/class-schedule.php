@@ -31,6 +31,19 @@ class LivePull_Schedule {
 
 	public static function init() {
 		add_action( self::HOOK, array( __CLASS__, 'run' ) );
+		add_action( 'init', array( __CLASS__, 'ensure' ) );
+	}
+
+	/**
+	 * Keep the scheduled event in place. Copy everything and restoring a backup replace
+	 * WordPress's list of scheduled events, and a schedule saved before connecting to live
+	 * had nothing to run yet: put it back whenever it should exist but doesn't.
+	 */
+	public static function ensure() {
+		$s = self::settings();
+		if ( 'off' !== $s['every'] && LivePull_Config::remote() && ! wp_next_scheduled( self::HOOK ) ) {
+			wp_schedule_event( time() + 5 * MINUTE_IN_SECONDS, $s['every'], self::HOOK );
+		}
 	}
 
 	public static function settings() {
@@ -79,12 +92,18 @@ class LivePull_Schedule {
 		while ( ! is_wp_error( $state ) && ! $state['done'] && $i++ < 500 ) {
 			$state = LivePull_Puller::step( $state, 20 );
 		}
+		if ( ! is_wp_error( $state ) && ! $state['done'] ) {
+			// Ran out of steps (a very big catch-up). What's done is saved; the next run continues.
+			LivePull_Puller::cancel( $state['lock'] );
+			$state = new WP_Error( 'livepull_unfinished', __( 'The scheduled pull had more to do than fits in one run. What came across is kept, and the next run carries on.', 'livepull' ) );
+		}
+		if ( is_wp_error( $state ) && 'livepull_locked' === $state->get_error_code() ) {
+			return $state; // Another pull is running: skip quietly and keep the last result as it was.
+		}
 		$report = is_wp_error( $state ) ? null : $state['report'];
 		if ( is_wp_error( $state ) ) {
 			$result = $state->get_error_message();
-			if ( 'livepull_locked' !== $state->get_error_code() ) {
-				LivePull_History::add( 'pull', array( 'errors' => array( $result ) ), array( 'source' => 'scheduled' ) );
-			}
+			LivePull_History::add( 'pull', array( 'errors' => array( $result ) ), array( 'source' => 'scheduled' ) );
 		} else {
 			$result = LivePull_History::summary( array(
 				'created_count'   => count( $report['created'] ),
@@ -96,18 +115,21 @@ class LivePull_Schedule {
 				'files'           => $report['files'],
 			) );
 		}
+		$failed_before    = ! empty( $s['failing'] );
 		$s['last_run']    = time();
 		$s['last_result'] = $result;
+		$s['failing']     = is_wp_error( $state );
 		update_option( self::OPTION, $s, false );
 
-		if ( $s['email'] ) {
-			self::email( $report, is_wp_error( $state ) ? $state : null );
+		// A failure is emailed once, not every run while live stays unreachable.
+		if ( $s['email'] && ! ( is_wp_error( $state ) && $failed_before ) ) {
+			self::email( $report, is_wp_error( $state ) ? $state : null, $result );
 		}
 		return is_wp_error( $state ) ? $state : $report;
 	}
 
 	/** Email the site admin when something came across, needs a decision, or went wrong. */
-	private static function email( $report, $error ) {
+	private static function email( $report, $error, $summary ) {
 		if ( $error && 'livepull_locked' === $error->get_error_code() ) {
 			return;
 		}
@@ -120,10 +142,10 @@ class LivePull_Schedule {
 		if ( $error ) {
 			/* translators: %s: site address */
 			$subject = sprintf( __( '[%s] Scheduled LivePull pull failed', 'livepull' ), $site );
-			$body    = $error->get_error_message();
+			$body    = $error->get_error_message() . "\n\n" . __( 'You won\'t get another email about this until a scheduled pull works again.', 'livepull' );
 		} else {
 			/* translators: 1: site address, 2: summary */
-			$subject = sprintf( __( '[%1$s] LivePull pulled from live: %2$s', 'livepull' ), $site, LivePull_History::summary( LivePull_History::all()[0] ) );
+			$subject = sprintf( __( '[%1$s] LivePull pulled from live: %2$s', 'livepull' ), $site, $summary );
 			$body    = '';
 			foreach ( array( 'created' => __( 'New', 'livepull' ), 'updated' => __( 'Updated', 'livepull' ), 'deleted' => __( 'Deleted', 'livepull' ), 'errors' => __( 'Errors', 'livepull' ) ) as $k => $title ) {
 				if ( $report[ $k ] ) {
@@ -136,6 +158,6 @@ class LivePull_Schedule {
 			}
 		}
 		$body .= "\n" . admin_url( 'tools.php?page=livepull' ) . "\n\n" . __( 'You get this email because scheduled pulls are on in Tools → LivePull.', 'livepull' );
-		wp_mail( get_option( 'admin_email' ), $subject, $body );
+		wp_mail( get_option( 'admin_email' ), $subject, LivePull_Config::scrub( $body ) );
 	}
 }

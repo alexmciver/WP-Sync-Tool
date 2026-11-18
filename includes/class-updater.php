@@ -187,9 +187,44 @@ final class LivePull_Updater {
 			'download_link' => $r ? $r['package'] : '',
 			'sections'      => array(
 				'description' => '<p>Pull content your client adds or edits on the live site into your local copy without overwriting your own work.</p>',
-				'changelog'   => $r && $r['notes'] ? wpautop( esc_html( $r['notes'] ) ) : '<p>See the releases on GitHub.</p>',
+				'changelog'   => $r && $r['notes'] ? self::notes_html( $r['notes'] ) : '<p>See the releases on GitHub.</p>',
 			),
 		);
+	}
+
+	/**
+	 * Release notes for the "View details" window: just the "What's new" part (the download
+	 * guide at the top is for the GitHub page), with simple headings, bullets and bold.
+	 */
+	public static function notes_html( $md ) {
+		$md  = str_replace( "\r\n", "\n", (string) $md );
+		$pos = stripos( $md, "### What's new" );
+		if ( false !== $pos ) {
+			$md = substr( $md, $pos + strlen( "### What's new" ) );
+		}
+		$html = '';
+		$list = false;
+		foreach ( explode( "\n", $md ) as $line ) {
+			$line = rtrim( $line );
+			if ( '' === trim( $line ) || 0 === strpos( ltrim( $line ), '|' ) ) {
+				continue; // Blank lines and table rows.
+			}
+			$text = esc_html( $line );
+			$text = preg_replace( '/\*\*(.+?)\*\*/', '<strong>$1</strong>', $text );
+			$text = preg_replace( '/(?<![\w*])\*([^*]+)\*(?![\w*])/', '<em>$1</em>', $text );
+			$text = preg_replace( '/`([^`]+)`/', '<code>$1</code>', $text );
+			if ( preg_match( '/^\s*[-*] (.*)$/', $text, $m ) ) {
+				$html .= ( $list ? '' : '<ul>' ) . '<li>' . $m[1] . '</li>';
+				$list  = true;
+				continue;
+			}
+			if ( $list ) {
+				$html .= '</ul>';
+				$list  = false;
+			}
+			$html .= preg_match( '/^#{1,6} (.*)$/', $text, $m ) ? '<h4>' . $m[1] . '</h4>' : '<p>' . $text . '</p>';
+		}
+		return $html . ( $list ? '</ul>' : '' );
 	}
 
 	/** Make sure the unzipped folder is always wp-content/plugins/livepull/ (GitHub zipballs use repo-hash names). */
@@ -253,6 +288,9 @@ final class LivePull_Updater {
 			return new WP_Error( 'livepull_checksum', 'The downloaded LivePull update didn\'t match its published checksum, so it was not installed.' );
 		}
 		$signed = self::signed( $package, $file );
+		if ( ! is_wp_error( $signed ) ) {
+			$signed = self::version_ok( $package, $file );
+		}
 		if ( is_wp_error( $signed ) ) {
 			wp_delete_file( $file );
 			return $signed;
@@ -275,6 +313,45 @@ final class LivePull_Updater {
 			return $fail;
 		}
 		return self::signature_ok( trim( wp_remote_retrieve_body( $res ) ), (string) file_get_contents( $file ) ) ? true : $fail; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- local temp file.
+	}
+
+	/**
+	 * The signature proves a zip is a genuine release, but not which one. So the version
+	 * inside the zip must be the release it was offered as, and newer than this copy:
+	 * an old signed release can't be passed off as an update.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function version_ok( $package, $file ) {
+		$fail = new WP_Error( 'livepull_version', 'This LivePull download isn\'t the version it claimed to be, so it was not installed.' );
+		if ( ! preg_match( '#/releases/download/v?([0-9][0-9A-Za-z.\-]*)/livepull\.zip$#', (string) $package, $m ) ) {
+			return $fail;
+		}
+		$inside = self::zip_version( $file );
+		if ( ! $inside || $inside !== $m[1] || ! version_compare( $inside, LivePull_Config::VERSION, '>' ) ) {
+			return $fail;
+		}
+		return true;
+	}
+
+	/** The Version: header of livepull/livepull.php inside a release zip, or ''. */
+	public static function zip_version( $file ) {
+		$php = '';
+		if ( class_exists( 'ZipArchive' ) ) {
+			$zip = new ZipArchive();
+			if ( true === $zip->open( $file ) ) {
+				$php = (string) $zip->getFromName( 'livepull/livepull.php' );
+				$zip->close();
+			}
+		} else {
+			if ( ! class_exists( 'PclZip' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/class-pclzip.php';
+			}
+			$zip = new PclZip( $file );
+			$got = $zip->extract( PCLZIP_OPT_BY_NAME, 'livepull/livepull.php', PCLZIP_OPT_EXTRACT_AS_STRING );
+			$php = is_array( $got ) && isset( $got[0]['content'] ) ? (string) $got[0]['content'] : '';
+		}
+		return preg_match( '/^[ \t\/*#@]*Version:\s*([0-9][0-9A-Za-z.\-]*)/mi', substr( $php, 0, 8192 ), $m ) ? $m[1] : '';
 	}
 
 	/** True when $sig (base64) is a valid signature of $data by SIGNING_KEY. */

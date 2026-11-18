@@ -142,12 +142,13 @@ final class LivePull_Puller {
 			return $remote;
 		}
 
+		$lock_token = '';
 		if ( ! $opts['dry_run'] ) {
-			$lock = get_transient( self::LOCK );
-			if ( $lock && ! $opts['force'] ) {
-				return new WP_Error( 'livepull_locked', 'Another pull is already running (started ' . human_time_diff( (int) $lock ) . ' ago). It unlocks automatically after 15 minutes of inactivity.' );
+			$lock_token = self::lock_acquire( $opts['source'], (bool) $opts['force'] );
+			if ( '' === $lock_token ) {
+				$cur = self::lock_info();
+				return new WP_Error( 'livepull_locked', 'Another pull is already running (last active ' . human_time_diff( $cur ? (int) $cur['time'] : time() ) . ' ago). It unlocks automatically after 15 minutes without activity.' );
 			}
-			set_transient( self::LOCK, time(), 15 * MINUTE_IN_SECONDS );
 		}
 
 		LivePull_Ids::maybe_backfill();
@@ -172,6 +173,7 @@ final class LivePull_Puller {
 		$held_queue = $opts['dry_run'] ? array_keys( $held ) : array_values( array_intersect( $opts['include_held'], array_keys( $held ) ) );
 
 		return array(
+			'lock'       => $lock_token,
 			'held_queue' => $held_queue,
 			'preview'    => array(),
 			'remote'  => $remote,
@@ -205,10 +207,13 @@ final class LivePull_Puller {
 		}
 		$t0  = microtime( true );
 		$dry = (bool) $state['opts']['dry_run'];
-		$state += array( 'held_queue' => array(), 'preview' => array(), 'pending' => array(), 'downloads' => array(), 'dl_total' => 0, 'dl_done' => 0, 'page_open' => false, 'page_last_id' => 0, 'page_has_more' => false, 'activity' => '' );
+		$state += array( 'lock' => '', 'held_queue' => array(), 'preview' => array(), 'pending' => array(), 'downloads' => array(), 'dl_total' => 0, 'dl_done' => 0, 'page_open' => false, 'page_last_id' => 0, 'page_has_more' => false, 'activity' => '' );
 		$out = function () use ( $t0, $budget ) {
 			return $budget > 0 && ( microtime( true ) - $t0 ) >= $budget;
 		};
+		if ( ! $dry && ! $state['done'] && ! self::lock_renew( $state['lock'] ) ) {
+			return new WP_Error( 'livepull_locked', 'This pull was stopped (from the LivePull screen, or another pull or copy took over). Everything up to the last finished batch is kept.' );
+		}
 
 		while ( ! $state['done'] ) {
 			// 1. Media files for the current page.
@@ -246,6 +251,7 @@ final class LivePull_Puller {
 				if ( ! $dry && $state['backup'] ) {
 					$backup = self::ensure_backup( $state );
 					if ( is_wp_error( $backup ) ) {
+						self::unlock( $state );
 						return $backup;
 					}
 				}
@@ -301,7 +307,7 @@ final class LivePull_Puller {
 					$state['activity'] = 'Fetching items held back earlier…';
 					$obj = $client->get( 'object', array( 'type' => $type, 'id' => $sid ) );
 					if ( is_wp_error( $obj ) ) {
-						if ( 'livepull_not_found' === $obj->get_error_code() || false !== strpos( $obj->get_error_message(), 'Not found' ) ) {
+						if ( in_array( $obj->get_error_code(), array( 'livepull_not_found', 'livepull_excluded' ), true ) || false !== strpos( $obj->get_error_message(), 'Not found' ) ) {
 							$obj = array( 'type' => $type, 'sync_id' => $sid, 'deleted' => true ); // Gone from live since.
 						} else {
 							$state['report']['errors'][] = 'Could not fetch held-back item: ' . $obj->get_error_message();
@@ -323,11 +329,12 @@ final class LivePull_Puller {
 			// 4. Fetch the next page.
 			$state['activity'] = 'Asking live for changes…';
 			$params = array( 'after' => $state['after'], 'limit' => LivePull_Config::page_size() );
+			if ( LivePull_Config::group_on( 'comments' ) ) {
+				$params['comments'] = 1;
+			}
 			if ( 'scan' === $state['mode'] ) {
-				$params['since'] = $state['since'];
-				if ( LivePull_Config::group_on( 'comments' ) ) {
-					$params['comments'] = 1;
-				}
+				$params['since']  = $state['since'];
+				$params['cafter'] = isset( $state['cafter'] ) ? (int) $state['cafter'] : 0;
 			}
 			$res = self::client()->get( $state['mode'], $params );
 			if ( is_wp_error( $res ) ) {
@@ -338,6 +345,9 @@ final class LivePull_Puller {
 			$state['page_open']     = true;
 			$state['page_last_id']  = (int) $res['last_id'];
 			$state['page_has_more'] = ! empty( $res['has_more'] );
+			if ( isset( $res['comments_after'] ) ) {
+				$state['cafter'] = (int) $res['comments_after'];
+			}
 			if ( ! empty( $res['items'] ) ) {
 				$state['pending'] = LivePull_Importer::sort_items( $res['items'] );
 			}
@@ -346,8 +356,8 @@ final class LivePull_Puller {
 			}
 		}
 
-		if ( ! $dry ) {
-			set_transient( self::LOCK, time(), 15 * MINUTE_IN_SECONDS );
+		if ( ! $dry && ! $state['done'] && ! self::lock_renew( $state['lock'] ) ) {
+			return new WP_Error( 'livepull_locked', 'This pull was stopped because another pull or copy took over. Everything up to the last finished batch is kept.' );
 		}
 		if ( $state['done'] ) {
 			$state['activity'] = 'Finished';
@@ -444,9 +454,118 @@ final class LivePull_Puller {
 		$state['preview'][ $d['key'] ] = $d;
 	}
 
-	/** Stop a pull (admin Cancel / Unlock). Progress up to the last finished batch is kept. */
-	public static function cancel() {
-		delete_transient( self::LOCK );
+	/* ------------------------------------------------------------------ Lock
+	 *
+	 * One pull or copy at a time. The lock is a row in the options table claimed with a
+	 * single INSERT, so two runs can't both get it. Each run holds its own token and renews
+	 * the lock as it goes; a run that finds the lock gone or taken stops at its next step.
+	 * A lock nobody has renewed for 15 minutes counts as abandoned.
+	 */
+
+	const LOCK_STALE = 900;  // Abandoned after 15 minutes without a sign of life.
+	const LOCK_QUIET = 180;  // "Unlock" is only allowed once a run has been quiet this long.
+
+	/** @return array{owner:string,time:int,source:string}|null straight from the database. */
+	public static function lock_info() {
+		global $wpdb;
+		$raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
+		$v   = null === $raw ? null : maybe_unserialize( $raw );
+		return is_array( $v ) && isset( $v['owner'], $v['time'] ) ? $v + array( 'source' => '' ) : ( null === $raw ? null : array( 'owner' => '', 'time' => 0, 'source' => '' ) );
+	}
+
+	/** Claim the lock. @return string token, or '' if another run holds it. */
+	public static function lock_acquire( $source, $take_over = false ) {
+		global $wpdb;
+		$token = wp_generate_password( 24, false );
+		$value = maybe_serialize( array( 'owner' => $token, 'time' => time(), 'source' => (string) $source ) );
+		$ok    = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", self::LOCK, $value ) );
+		if ( 1 !== (int) $ok ) {
+			$cur = self::lock_info();
+			if ( $cur && ! $take_over && time() - (int) $cur['time'] < self::LOCK_STALE ) {
+				return '';
+			}
+			// Abandoned (or taking over on purpose): replace exactly the row we looked at.
+			$old = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
+			$ok  = null === $old
+				? $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", self::LOCK, $value ) )
+				: $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $value, self::LOCK, $old ) );
+			if ( 1 !== (int) $ok ) {
+				return '';
+			}
+		}
+		wp_cache_delete( self::LOCK, 'options' );
+		return $token;
+	}
+
+	/** Renew our lock. @return bool false if it's no longer ours (stop running). */
+	public static function lock_renew( $token ) {
+		global $wpdb;
+		$cur = self::lock_info();
+		if ( ! $token || ! $cur || ! hash_equals( (string) $cur['owner'], (string) $token ) ) {
+			return false;
+		}
+		$old = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
+		$new = maybe_serialize( array( 'owner' => $token, 'time' => time(), 'source' => $cur['source'] ) );
+		return 1 === (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $new, self::LOCK, $old ) ) || $old === $new;
+	}
+
+	/** Let go of our lock (only ours). */
+	public static function lock_release( $token ) {
+		global $wpdb;
+		$cur = self::lock_info();
+		if ( $token && $cur && hash_equals( (string) $cur['owner'], (string) $token ) ) {
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
+			wp_cache_delete( self::LOCK, 'options' );
+		}
+	}
+
+	/** Let go of a lock held by a given kind of run (e.g. a copy that is being abandoned). */
+	public static function lock_release_source( $source ) {
+		$cur = self::lock_info();
+		if ( $cur && $source === $cur['source'] ) {
+			self::lock_clear();
+		}
+	}
+
+	/** Remove whoever holds the lock (after checking it's safe to). */
+	private static function lock_clear() {
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
+		wp_cache_delete( self::LOCK, 'options' );
+	}
+
+	/**
+	 * Stop a pull (admin Stop / Unlock). Your own run stops straight away. Someone else's
+	 * run (a scheduled pull, the terminal, another tab) is only unlocked once it has gone
+	 * quiet, so a pull that is really running is never doubled up.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function cancel( $token = '' ) {
+		$cur = self::lock_info();
+		if ( ! $cur ) {
+			return true;
+		}
+		if ( $token && hash_equals( (string) $cur['owner'], (string) $token ) ) {
+			self::lock_clear();
+			return true;
+		}
+		$idle = time() - (int) $cur['time'];
+		if ( $idle < self::LOCK_QUIET ) {
+			$who = array(
+				'scheduled' => __( 'A scheduled pull', 'livepull' ),
+				'cli'       => __( 'A pull started from the terminal', 'livepull' ),
+				'copy'      => __( 'Copy everything', 'livepull' ),
+			);
+			return new WP_Error( 'livepull_busy', sprintf(
+				/* translators: 1: what is running, 2: time span */
+				__( '%1$s is running right now (last active %2$s ago). Wait for it to finish; it is safe to leave this page.', 'livepull' ),
+				isset( $who[ $cur['source'] ] ) ? $who[ $cur['source'] ] : __( 'Another pull', 'livepull' ),
+				human_time_diff( (int) $cur['time'] )
+			) );
+		}
+		self::lock_clear();
+		return true;
 	}
 
 	private static function finish( array $state ) {
@@ -475,7 +594,7 @@ final class LivePull_Puller {
 
 	private static function unlock( array $state ) {
 		if ( empty( $state['opts']['dry_run'] ) ) {
-			delete_transient( self::LOCK );
+			self::lock_release( $state['lock'] );
 		}
 	}
 
@@ -541,13 +660,19 @@ final class LivePull_Puller {
 		if ( is_wp_error( $obj ) ) {
 			return new WP_Error( 'livepull_gone', 'Could not fetch it from live (' . $obj->get_error_message() . '). If it was deleted on live, delete it here too, then choose "Keep mine" to dismiss.' );
 		}
+		$lock = self::lock_acquire( 'take' );
+		if ( '' === $lock ) {
+			return new WP_Error( 'livepull_locked', 'A pull or copy is running. Try again when it has finished.' );
+		}
 		$file = LivePull_Backup::create();
 		if ( is_wp_error( $file ) ) {
+			self::lock_release( $lock );
 			return $file;
 		}
 		LivePull_Importer::reset_cache();
 		$importer = new LivePull_Importer( self::client(), $remote, array( 'force' => array( $key ) ) );
 		$report   = $importer->run( array( $obj ) );
+		self::lock_release( $lock );
 		self::forget_conflict( $key );
 		self::store_conflicts( $report );
 		self::after_pull( $report );
@@ -657,7 +782,13 @@ final class LivePull_Puller {
 				$rows[] = array( 'id' => 0, 'item' => 0 === strpos( $n, 'theme_mods_' ) ? 'setting "Menu locations / logo"' : 'setting "' . $n . '"', 'action' => 'edited', 'edit' => '' );
 				continue;
 			}
-			if ( 'post' === $type ) {
+			if ( 'comment' === $type ) {
+				$cm   = isset( $cm ) ? $cm : LivePull_Ids::map( 'comment' );
+				$id   = isset( $cm[ $sid ] ) ? $cm[ $sid ] : 0;
+				$c    = $id ? get_comment( $id ) : null;
+				$name = $c ? sprintf( 'comment by %s on "%s"', $c->comment_author, get_the_title( $c->comment_post_ID ) ) : '(deleted comment)';
+				$edit = $c ? get_edit_comment_link( $id ) : '';
+			} elseif ( 'post' === $type ) {
 				$id   = isset( $pm[ $sid ] ) ? $pm[ $sid ] : 0;
 				$post = $id ? get_post( $id ) : null;
 				$name = $post ? sprintf( '%s "%s"', $post->post_type, '' !== $post->post_title ? $post->post_title : '(no title)' ) : '(deleted)';

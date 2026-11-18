@@ -161,10 +161,18 @@ final class LivePull_Logger {
 		if ( ! $c || ! self::comment_syncable( $c ) ) {
 			return;
 		}
-		$sid = LivePull_Ids::for_comment( $c->comment_ID );
 		// Spam and trash count as gone; approving or un-approving keeps it.
 		$gone = in_array( (string) $c->comment_approved, array( 'spam', 'trash', 'post-trashed' ), true );
-		self::write( 'comment', $sid, (int) $c->comment_ID, $gone ? 'delete' : 'upsert' );
+		if ( $gone ) {
+			// Only worth recording if it was ever offered to local sites (it has a sync ID).
+			// New spam never is, so it adds nothing to the log.
+			$sid = LivePull_Ids::for_comment( $c->comment_ID, false );
+			if ( $sid ) {
+				self::write( 'comment', $sid, (int) $c->comment_ID, 'delete' );
+			}
+			return;
+		}
+		self::write( 'comment', LivePull_Ids::for_comment( $c->comment_ID ), (int) $c->comment_ID, 'upsert' );
 	}
 
 	public static function comment_deleted( $comment_id ) {

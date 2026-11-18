@@ -371,7 +371,8 @@
 			wrap.appendChild( det );
 		}
 		actions.forEach( function ( a ) {
-			section( a[ 1 ], items.filter( function ( i ) { return i.action === a[ 0 ] && ! i.held; } ), false, a[ 0 ] === 'conflict' );
+			// Conflicts are listed whether or not they were held back earlier, so none go unseen.
+			section( a[ 1 ], items.filter( function ( i ) { return i.action === a[ 0 ] && ( ! i.held || a[ 0 ] === 'conflict' ); } ), false, a[ 0 ] === 'conflict' );
 		} );
 		var held = items.filter( function ( i ) { return i.held && i.action !== 'conflict'; } );
 		section( __( 'Held back from earlier pulls (tick to pull them now)', 'livepull' ), held, true );
@@ -499,7 +500,14 @@
 				var ub = el( 'button', 'button', __( 'Unlock and pull again', 'livepull' ) );
 				ub.type = 'button';
 				ub.addEventListener( 'click', function () {
-					post( 'livepull_cancel' ).then( function () { result.innerHTML = ''; run( dry ); } );
+					ub.disabled = true;
+					post( 'livepull_cancel' ).then( function () {
+						result.innerHTML = '';
+						run( dry, extra ); // Same choices as before (what was ticked or held back).
+					} ).catch( function ( err ) {
+						ub.disabled = false;
+						notice( result, 'info', err.message );
+					} );
 				} );
 				n2.querySelector( 'p' ).appendChild( ub );
 			} else {

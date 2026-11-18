@@ -333,6 +333,10 @@ final class LivePull_Importer {
 		if ( '' === $name || ! LivePull_Config::option_allowed( $name ) || LivePull_Config::option_sid( $name ) !== $item['sync_id'] ) {
 			return sprintf( 'Ignored the setting "%s": LivePull doesn\'t pull that setting.', $name );
 		}
+		$g = LivePull_Config::group_of( 'option', $name );
+		if ( '' !== $g && ! LivePull_Config::group_on( $g ) ) {
+			return sprintf( 'Ignored the setting "%s": that kind of setting is switched off on this site.', $name );
+		}
 		return '';
 	}
 
@@ -371,6 +375,18 @@ final class LivePull_Importer {
 			$this->conflict( $key, $item, $local, 'changed on live AND changed locally' );
 			return $local;
 		}
+		if ( ! isset( $item['comment'] ) || ! is_array( $item['comment'] ) ) {
+			$this->report['skipped'][] = 'Ignored a comment that live sent in an unexpected shape.';
+			return 0;
+		}
+		$item['comment'] = wp_parse_args( $item['comment'], array( 'comment_author' => '', 'comment_author_email' => '', 'comment_author_url' => '', 'comment_date' => '', 'comment_date_gmt' => '', 'comment_content' => '', 'comment_approved' => '0', 'comment_type' => 'comment', 'comment_karma' => 0, 'user_login' => '', 'user_email' => '' ) );
+		$item['meta']    = isset( $item['meta'] ) && is_array( $item['meta'] ) ? $item['meta'] : array();
+		// Only ordinary comment kinds: never order notes, logs or anything a plugin uses internally.
+		$ctype = (string) $item['comment']['comment_type'];
+		if ( ! in_array( $ctype, array( '', 'comment', 'review', 'pingback', 'trackback' ), true ) ) {
+			$this->report['skipped'][] = sprintf( 'Ignored a comment of type "%s": only comments and reviews are pulled.', sanitize_key( $ctype ) );
+			return 0;
+		}
 		if ( $this->opts['dry_run'] ) {
 			$this->report[ $local ? 'updated' : 'created' ][] = self::label( $item, $local );
 			return $local;
@@ -382,19 +398,23 @@ final class LivePull_Importer {
 		}
 		$c      = $item['comment'];
 		$parent = ! empty( $item['parent_sid'] ) ? (int) $this->resolve_sid( 'comment', $item['parent_sid'] ) : 0;
-		$user   = ! empty( $c['user_login'] ) ? get_user_by( 'login', $c['user_login'] ) : false;
+		// Linked to a local user only if the login AND email match (users differ between sites).
+		$user   = ! empty( $c['user_login'] ) ? get_user_by( 'login', (string) $c['user_login'] ) : false;
+		if ( $user && strtolower( (string) $user->user_email ) !== strtolower( (string) ( '' !== $c['user_email'] ? $c['user_email'] : $c['comment_author_email'] ) ) ) {
+			$user = false;
+		}
 		$data   = array(
 			'comment_post_ID'      => $post,
 			'comment_parent'       => $parent,
 			'user_id'              => $user ? (int) $user->ID : 0,
-			'comment_author'       => $c['comment_author'],
-			'comment_author_email' => $c['comment_author_email'],
-			'comment_author_url'   => $c['comment_author_url'],
+			'comment_author'       => sanitize_text_field( (string) $c['comment_author'] ),
+			'comment_author_email' => sanitize_email( (string) $c['comment_author_email'] ),
+			'comment_author_url'   => esc_url_raw( (string) $c['comment_author_url'] ),
 			'comment_date'         => $c['comment_date'],
 			'comment_date_gmt'     => $c['comment_date_gmt'],
-			'comment_content'      => $this->urls( $c['comment_content'] ),
+			'comment_content'      => wp_kses_post( (string) $this->urls( (string) $c['comment_content'] ) ),
 			'comment_approved'     => in_array( $c['comment_approved'], array( '0', '1' ), true ) ? $c['comment_approved'] : '0',
-			'comment_type'         => sanitize_key( $c['comment_type'] ),
+			'comment_type'         => '' === $ctype ? 'comment' : $ctype,
 			'comment_karma'        => (int) $c['comment_karma'],
 		);
 		if ( $local && get_comment( $local ) ) {
@@ -412,7 +432,7 @@ final class LivePull_Importer {
 			return 0;
 		}
 		foreach ( (array) $item['meta'] as $mk => $vals ) {
-			if ( LivePull_Config::is_ignored_meta( $mk ) ) {
+			if ( LivePull_Config::is_ignored_meta( $mk ) || LivePull_Config::is_private_comment_meta( $mk ) ) {
 				continue;
 			}
 			delete_comment_meta( $id, $mk );

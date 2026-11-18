@@ -105,7 +105,7 @@ final class LivePull_Rest {
 			'callback'            => array( __CLASS__, 'object' ),
 			'permission_callback' => $auth,
 			'args'                => array(
-				'type' => array( 'type' => 'string', 'enum' => array( 'post', 'term', 'option' ), 'required' => true ),
+				'type' => array( 'type' => 'string', 'enum' => array( 'post', 'term', 'option', 'comment' ), 'required' => true ),
 				'id'   => array( 'type' => 'string', 'required' => true ),
 			),
 		) );
@@ -152,13 +152,16 @@ final class LivePull_Rest {
 		global $wpdb;
 		$after = max( 0, (int) $r['after'] );
 		$limit = self::limit( $r );
+		// Comments (with commenters' names and emails) only go to sites that pull them.
+		$skip  = empty( $r['comments'] ) ? 'comment' : '';
 		$rows  = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT id, object_type, sync_id, object_id, action FROM %i
-				 WHERE id > %d AND source = 'local' AND action IN ('upsert','delete')
+				 WHERE id > %d AND source = 'local' AND action IN ('upsert','delete') AND object_type <> %s
 				 ORDER BY id ASC LIMIT %d",
 				LivePull_Config::table(),
 				$after,
+				$skip,
 				$limit + 1
 			)
 		);
@@ -270,16 +273,6 @@ final class LivePull_Rest {
 					$items[] = $item;
 				}
 			}
-			// Comments made since the date (sites that don't pull comments skip them).
-			if ( ! empty( $r['comments'] ) ) {
-				$cids = get_comments( array( 'status' => 'all', 'date_query' => array( array( 'after' => gmdate( 'Y-m-d H:i:s', $since ), 'column' => 'comment_date_gmt', 'inclusive' => true ) ), 'fields' => 'ids', 'number' => 5000 ) );
-				foreach ( (array) $cids as $cid ) {
-					$item = LivePull_Exporter::comment( $cid );
-					if ( $item ) {
-						$items[] = $item;
-					}
-				}
-			}
 			$taxes = array_values( array_filter( get_taxonomies(), array( 'LivePull_Config', 'recordable_taxonomy' ) ) );
 			$terms = get_terms( array( 'taxonomy' => $taxes, 'hide_empty' => false, 'fields' => 'ids' ) );
 			if ( ! is_wp_error( $terms ) ) {
@@ -297,10 +290,33 @@ final class LivePull_Rest {
 				$items[] = $item;
 			}
 		}
+		// Comments made since the date, a page at a time alongside the posts (only for
+		// sites that pull comments). They come after the posts in each page, so their
+		// posts are already there.
+		$cafter = max( 0, (int) $r['cafter'] );
+		$cmore  = false;
+		if ( ! empty( $r['comments'] ) ) {
+			$cids  = $wpdb->get_col( $wpdb->prepare(
+				"SELECT comment_ID FROM {$wpdb->comments} WHERE comment_ID > %d AND comment_date_gmt >= %s AND comment_approved IN ('0','1') ORDER BY comment_ID ASC LIMIT %d",
+				$cafter,
+				gmdate( 'Y-m-d H:i:s', $since ),
+				$limit + 1
+			) );
+			$cmore = count( $cids ) > $limit;
+			$cids  = array_slice( $cids, 0, $limit );
+			foreach ( $cids as $cid ) {
+				$item = LivePull_Exporter::comment( $cid );
+				if ( $item ) {
+					$items[] = $item;
+				}
+			}
+			$cafter = $cids ? (int) end( $cids ) : $cafter;
+		}
 		return array(
-			'items'    => $items,
-			'last_id'  => $ids ? (int) end( $ids ) : $after,
-			'has_more' => $has_more,
+			'items'          => $items,
+			'last_id'        => $ids ? (int) end( $ids ) : $after,
+			'has_more'       => $has_more || $cmore,
+			'comments_after' => $cafter,
 		);
 	}
 

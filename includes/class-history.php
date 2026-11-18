@@ -40,7 +40,7 @@ class LivePull_History {
 				}, $items );
 			}
 			$entry[ $k . '_count' ] = count( $items );
-			$entry[ $k ]            = array_slice( array_map( 'strval', $items ), 0, self::ITEMS );
+			$entry[ $k ]            = array_slice( array_map( array( 'LivePull_Config', 'scrub' ), $items ), 0, self::ITEMS );
 		}
 		array_unshift( $list, $entry );
 		update_option( self::OPTION, array_slice( $list, 0, self::KEEP ), false );

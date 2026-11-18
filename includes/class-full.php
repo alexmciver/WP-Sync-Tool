@@ -392,7 +392,7 @@ final class LivePull_Full {
 		if ( empty( $remote['full_copy'] ) ) {
 			return new WP_Error( 'livepull_full_off', 'Copy everything is switched off on the live site (it shares the whole database, so it\'s off by default). On live, open Tools → LivePull → "Let other sites pull from this one" and click "Allow for 1 hour", then try again here.' );
 		}
-		if ( get_transient( LivePull_Puller::LOCK ) ) {
+		if ( LivePull_Puller::lock_info() ) {
 			return new WP_Error( 'livepull_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
 		}
 		$list = self::client()->get( 'db-tables' );
@@ -402,7 +402,10 @@ final class LivePull_Full {
 		if ( ! self::resume_placing( 0 ) ) {
 			return new WP_Error( 'livepull_placing', 'Files from the last copy are still being moved into place. Try again in a moment.' );
 		}
-		set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
+		$lock = LivePull_Puller::lock_acquire( 'copy' );
+		if ( '' === $lock ) {
+			return new WP_Error( 'livepull_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
+		}
 		self::clear_cancel();
 		self::drop_temp_tables();
 		self::remove_stages();
@@ -423,6 +426,7 @@ final class LivePull_Full {
 		}
 
 		return array(
+			'lock'     => $lock,
 			'remote'   => $remote,
 			'rprefix'  => $list['prefix'],
 			'tables'   => $tables,
@@ -508,7 +512,7 @@ final class LivePull_Full {
 				if ( self::place_files( $state, $place_out ) ) {
 					$state['done']     = true;
 					$state['activity'] = 'Finished';
-					delete_transient( LivePull_Puller::LOCK );
+					LivePull_Puller::lock_release( isset( $state['lock'] ) ? $state['lock'] : '' );
 					LivePull_History::add( 'copy', array( 'errors' => $state['errors'], 'files' => (int) $state['files_got'] ), array( 'backup' => isset( $state['backup_file'] ) ? $state['backup_file'] : '', 'note' => sprintf( '%d tables copied from live', count( $state['tables'] ) ) ) );
 				}
 				break;
@@ -578,8 +582,13 @@ final class LivePull_Full {
 				break;
 			}
 		}
-		if ( ! $state['done'] ) {
-			set_transient( LivePull_Puller::LOCK, time(), 15 * MINUTE_IN_SECONDS );
+		// Until the switch-over, stop if the lock was taken away (someone pressed Stop/Unlock,
+		// or it was abandoned and another run claimed it). After it, the lock went with the old
+		// database and only moving files into place is left.
+		if ( ! $state['done'] && in_array( $state['phase'], array( 'backup', 'tables', 'files', 'swap' ), true )
+			&& ! LivePull_Puller::lock_renew( isset( $state['lock'] ) ? $state['lock'] : '' ) ) {
+			self::abort();
+			return new WP_Error( 'livepull_locked', 'Copy everything was stopped because another pull took over. Nothing on this site was changed.' );
 		}
 		return $state;
 	}
@@ -608,7 +617,7 @@ final class LivePull_Full {
 		if ( ! self::placing() ) { // Never after the switch: those files belong to the new database.
 			self::remove_stages();
 		}
-		delete_transient( LivePull_Puller::LOCK );
+		LivePull_Puller::lock_release_source( 'copy' );
 	}
 
 	const PLACING = 'livepull_full_placing';
@@ -915,7 +924,9 @@ final class LivePull_Full {
 				$state['files_token'] = wp_generate_password( 20, false );
 			}
 			$res = $client->get( 'files', array( 'offset' => $state['files_offset'], 'limit' => 2000, 'token' => $state['files_token'] ) );
-			if ( is_wp_error( $res ) && 'livepull_listing_gone' === $res->get_error_code() && empty( $state['files_relisted'] ) ) {
+			// The client reports live's "list expired" answer as HTTP 410.
+			$gone = is_wp_error( $res ) && in_array( $res->get_error_code(), array( 'livepull_listing_gone', 'livepull_http_410' ), true );
+			if ( $gone && empty( $state['files_relisted'] ) ) {
 				// Live lost its list part-way: list again from the start (once). Files already
 				// downloaded are skipped, so nothing is copied twice.
 				$state['files_relisted'] = true;
@@ -1021,7 +1032,7 @@ final class LivePull_Full {
 		update_option( 'livepull_last_pull', gmdate( 'Y-m-d H:i:s' ), false );
 		update_option( 'livepull_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
 		update_option( 'livepull_last_full_copy', gmdate( 'Y-m-d H:i:s' ), false );
-		delete_transient( LivePull_Puller::LOCK );
+		LivePull_Puller::lock_release_source( 'copy' ); // Live's options table may have brought one along.
 		wp_cache_flush();
 		return true;
 	}

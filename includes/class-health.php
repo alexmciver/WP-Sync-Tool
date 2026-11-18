@@ -16,6 +16,34 @@ class LivePull_Health {
 	/**
 	 * Run every check. @return array List of array( status: ok|warn|fail, title, detail, fix ).
 	 */
+	/** The staging password header (LIVEPULL_REMOTE_BASIC_AUTH), as the client sends it. */
+	private static function basic_auth() {
+		return defined( 'LIVEPULL_REMOTE_BASIC_AUTH' ) && LIVEPULL_REMOTE_BASIC_AUTH ? array( 'Authorization' => 'Basic ' . base64_encode( LIVEPULL_REMOTE_BASIC_AUTH ) ) : array(); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- HTTP basic auth.
+	}
+
+	/**
+	 * GET that follows up to 3 redirects itself, sending the staging password only to the
+	 * live site's own host (never to wherever a redirect points).
+	 */
+	private static function fetch( $url, array $args, $remote ) {
+		$host = strtolower( (string) wp_parse_url( $remote, PHP_URL_HOST ) );
+		$args['redirection'] = 0;
+		for ( $i = 0; $i < 4; $i++ ) {
+			$a = $args;
+			if ( strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) ) === $host ) {
+				$a['headers'] = ( isset( $a['headers'] ) ? $a['headers'] : array() ) + self::basic_auth();
+			}
+			$res  = wp_remote_get( $url, $a );
+			$code = (int) wp_remote_retrieve_response_code( $res );
+			$next = is_wp_error( $res ) ? '' : (string) wp_remote_retrieve_header( $res, 'location' );
+			if ( $code < 300 || $code > 399 || '' === $next ) {
+				return $res;
+			}
+			$url = 0 === strpos( $next, '/' ) ? preg_replace( '#^(https?://[^/]+).*$#i', '$1', $url ) . $next : $next;
+		}
+		return $res;
+	}
+
 	public static function run() {
 		$checks = array();
 		$add    = function ( $status, $title, $detail = '', $fix = '' ) use ( &$checks ) {
@@ -33,7 +61,7 @@ class LivePull_Health {
 
 		// 1. Can we reach the live site at all?
 		$t0   = microtime( true );
-		$home = wp_remote_get( $remote . '/', array( 'timeout' => 20, 'redirection' => 3, 'sslverify' => self::sslverify() ) );
+		$home = self::fetch( $remote . '/', array( 'timeout' => 20, 'sslverify' => self::sslverify() ), $remote );
 		$ms   = (int) round( ( microtime( true ) - $t0 ) * 1000 );
 		if ( is_wp_error( $home ) ) {
 			list( $title, $fix ) = self::network_fix( $home->get_error_message(), $remote );
@@ -42,7 +70,7 @@ class LivePull_Health {
 		}
 		$code = (int) wp_remote_retrieve_response_code( $home );
 		if ( 401 === $code ) {
-			$add( 'fail', __( 'The live site asks for a username and password', 'livepull' ), 'HTTP 401', __( 'It is behind password protection (common on staging sites). Add define( \'LIVEPULL_REMOTE_BASIC_AUTH\', \'username:password\' ); to wp-config.php on this site.', 'livepull' ) );
+			$add( 'fail', __( 'The live site asks for a username and password', 'livepull' ), 'HTTP 401', ( self::basic_auth() ? __( 'The username and password in LIVEPULL_REMOTE_BASIC_AUTH in wp-config.php weren\'t accepted. Check them with whoever set up the password protection.', 'livepull' ) : __( 'It is behind password protection (common on staging sites). Add define( \'LIVEPULL_REMOTE_BASIC_AUTH\', \'username:password\' ); to wp-config.php on this site.', 'livepull' ) ) );
 			return $checks;
 		}
 		/* translators: 1: HTTP status, 2: milliseconds */
@@ -120,13 +148,16 @@ class LivePull_Health {
 			$add( 'warn', __( 'PHP memory is low', 'livepull' ), sprintf( __( 'memory_limit is %s', 'livepull' ), ini_get( 'memory_limit' ) ), __( 'Big pages and backups may fail. Raise memory_limit to at least 256M.', 'livepull' ) );
 		}
 		$sched = LivePull_Schedule::settings();
+		if ( 'off' !== $sched['every'] && ! LivePull_Schedule::next() ) {
+			$add( 'warn', __( 'Scheduled pulls are on but not scheduled', 'livepull' ), '', __( 'Open Tools → LivePull → Settings and press Save under "Pull automatically".', 'livepull' ) );
+		}
 		if ( 'off' !== $sched['every'] && defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) {
 			$add( 'warn', __( 'Scheduled pulls rely on a server cron job here', 'livepull' ), 'DISABLE_WP_CRON', __( 'WordPress\'s own scheduler is switched off on this site, so make sure a server cron job runs wp-cron.php (or `wp cron event run --due-now`) regularly, or scheduled pulls won\'t run.', 'livepull' ) );
 		}
-		$lock = get_transient( LivePull_Puller::LOCK );
-		if ( $lock && time() - (int) $lock > 5 * MINUTE_IN_SECONDS ) {
+		$lock = LivePull_Puller::lock_info();
+		if ( $lock && time() - (int) $lock['time'] > LivePull_Puller::LOCK_QUIET ) {
 			/* translators: %s: time span */
-			$add( 'warn', __( 'A pull looks stuck', 'livepull' ), sprintf( __( 'Locked %s ago.', 'livepull' ), human_time_diff( (int) $lock ) ), __( 'If nothing is running (for example the page was closed mid-pull), press Pull again and choose "Unlock and pull again".', 'livepull' ) );
+			$add( 'warn', __( 'A pull looks stuck', 'livepull' ), sprintf( __( 'Nothing has happened for %s.', 'livepull' ), human_time_diff( (int) $lock['time'] ) ), __( 'If nothing is running (for example the page was closed mid-pull), press Pull again and choose "Unlock and pull again". It also unlocks by itself after 15 minutes.', 'livepull' ) );
 		}
 	}
 
@@ -155,7 +186,7 @@ class LivePull_Health {
 	private static function rest_probe( $remote ) {
 		$last = null;
 		foreach ( array( 'pretty' => $remote . '/wp-json/', 'plain' => $remote . '/?rest_route=/' ) as $style => $url ) {
-			$res = wp_remote_get( add_query_arg( '_livepull', (string) microtime( true ), $url ), array( 'timeout' => 20, 'redirection' => 3, 'sslverify' => self::sslverify(), 'headers' => array( 'Accept' => 'application/json' ) ) );
+			$res = self::fetch( add_query_arg( '_livepull', (string) microtime( true ), $url ), array( 'timeout' => 20, 'sslverify' => self::sslverify(), 'headers' => array( 'Accept' => 'application/json' ) ), $remote );
 			if ( is_wp_error( $res ) ) {
 				return $res;
 			}
@@ -176,7 +207,7 @@ class LivePull_Health {
 	/** Ask for status twice: identical answers or cache-hit headers mean something caches them. */
 	private static function cache_probe( $remote, $secret ) {
 		$url  = $remote . '/wp-json/livepull/v1/status';
-		$args = array( 'timeout' => 20, 'redirection' => 0, 'sslverify' => self::sslverify(), 'headers' => array( 'X-LivePull-Key' => $secret, 'Accept' => 'application/json' ) );
+		$args = array( 'timeout' => 20, 'redirection' => 0, 'sslverify' => self::sslverify(), 'headers' => array( 'X-LivePull-Key' => $secret, 'Accept' => 'application/json' ) + self::basic_auth() );
 		$res  = wp_remote_get( $url, $args ); // Deliberately without a cache-buster.
 		if ( is_wp_error( $res ) ) {
 			return '';
@@ -239,7 +270,7 @@ class LivePull_Health {
 	/* ============================================================ Report a problem */
 
 	/** Plain-text details for a bug report. No keys or passwords. */
-	public static function diagnostics( array $checks = null ) {
+	public static function diagnostics( ?array $checks = null ) {
 		global $wpdb, $wp_version;
 		$lines   = array();
 		$lines[] = '### Environment';
@@ -285,11 +316,19 @@ class LivePull_Health {
 		foreach ( (array) get_option( 'active_plugins', array() ) as $f ) {
 			$lines[] = '- ' . ( isset( $all[ $f ] ) ? $all[ $f ]['Name'] . ' ' . $all[ $f ]['Version'] : $f );
 		}
-		return implode( "\n", $lines );
+		return LivePull_Config::scrub( implode( "\n", $lines ) );
 	}
 
 	/** A pre-filled "new issue" link on GitHub (long reports are cut; the full text is copied). */
+	/** True for the GitHub download (it has the updater); false for the WordPress.org copy. */
+	public static function from_github() {
+		return class_exists( 'LivePull_Updater' );
+	}
+
 	public static function issue_url( $text ) {
+		if ( ! self::from_github() ) {
+			return 'https://wordpress.org/support/plugin/livepull/#new-topic-0';
+		}
 		$body = "**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n1. \n\n" . "<details><summary>Site details (from LivePull)</summary>\n\n" . $text . "\n</details>";
 		if ( strlen( $body ) > 6000 ) {
 			$body = substr( $body, 0, 5800 ) . "\n…(cut: paste the full details from LivePull)\n</details>";

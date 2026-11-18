@@ -84,11 +84,19 @@ final class LivePull_Exporter {
 		if ( ! $c || ! LivePull_Logger::comment_syncable( $c ) || in_array( (string) $c->comment_approved, array( 'spam', 'trash', 'post-trashed' ), true ) ) {
 			return null;
 		}
-		$meta = array();
+		$meta    = array();
+		$private = array_filter( array( (string) $c->comment_author_IP, (string) $c->comment_agent ) );
 		foreach ( (array) get_comment_meta( $c->comment_ID ) as $k => $vals ) {
-			if ( ! LivePull_Config::is_ignored_meta( $k ) ) {
-				$meta[ $k ] = $vals;
+			if ( LivePull_Config::is_ignored_meta( $k ) || LivePull_Config::is_private_comment_meta( $k ) ) {
+				continue;
 			}
+			// Anything else that recorded the commenter's IP address or browser stays on live too.
+			foreach ( $private as $p ) {
+				if ( false !== strpos( implode( "\n", array_map( 'strval', (array) $vals ) ), $p ) ) {
+					continue 2;
+				}
+			}
+			$meta[ $k ] = $vals;
 		}
 		$user = $c->user_id ? get_userdata( $c->user_id ) : false;
 		return array(
@@ -107,6 +115,7 @@ final class LivePull_Exporter {
 				'comment_type'         => $c->comment_type,
 				'comment_karma'        => (int) $c->comment_karma,
 				'user_login'           => $user ? $user->user_login : '',
+				'user_email'           => $user ? $user->user_email : '',
 			),
 			'meta'        => $meta,
 			'post_title'  => get_the_title( $c->comment_post_ID ),

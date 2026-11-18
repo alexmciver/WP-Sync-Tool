@@ -5,6 +5,10 @@ name: Release
 #      livepull-wordpress-org.zip (WordPress.org version), and publish a GitHub Release.
 #   2. If WordPress.org SVN credentials are set (repository secrets SVN_USERNAME and
 #      SVN_PASSWORD), also publish the new version to the WordPress.org plugin directory.
+#
+# Every download is signed with the repository secret LIVEPULL_SIGNING_KEY. Without it the
+# job stops at "Sign" and nothing is published (not even to WordPress.org), on purpose:
+# installed copies refuse unsigned updates. See SECURITY.md.
 
 on:
   push:
@@ -19,6 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: sodium, zip
+          tools: none
 
       - name: Read version
         id: v

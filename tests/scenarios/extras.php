@@ -9,7 +9,15 @@ if ( 'create' === $phase ) {
 	$c1   = wp_insert_comment( array( 'comment_post_ID' => $post, 'comment_author' => 'Jane Visitor', 'comment_author_email' => 'jane@example.com', 'comment_content' => 'Great post, see ' . home_url( '/about/' ), 'comment_approved' => 1, 'comment_author_IP' => '203.0.113.9' ) );
 	$c2   = wp_insert_comment( array( 'comment_post_ID' => $post, 'comment_parent' => $c1, 'comment_author' => 'admin', 'user_id' => 1, 'comment_content' => 'Thanks Jane', 'comment_approved' => 1 ) );
 	$c3   = wp_insert_comment( array( 'comment_post_ID' => $post, 'comment_author' => 'Spammer', 'comment_content' => 'buy now', 'comment_approved' => 'spam' ) );
-	$data = array( 'post' => t_sid( $post ), 'c1' => t_sid( $c1, 'comment' ), 'c2' => t_sid( $c2, 'comment' ), 'c3' => t_sid( $c3, 'comment' ) );
+	$c4   = wp_insert_comment( array( 'comment_post_ID' => $post, 'comment_author' => 'Held Back', 'comment_content' => 'Hold me', 'comment_approved' => 1 ) );
+	// Anti-spam data and anything else that recorded the IP address must stay on live.
+	add_comment_meta( $c1, 'akismet_as_submitted', array( 'user_ip' => '203.0.113.9', 'REMOTE_ADDR' => '203.0.113.9' ) );
+	add_comment_meta( $c1, 'visitor_log', 'from 203.0.113.9' );
+	add_comment_meta( $c1, 'rating', '5' );
+	global $wpdb;
+	t_eq( (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE object_type = 'comment' AND object_id = %d", LivePull_Config::table(), $c3 ) ), 0, 'new spam comment adds nothing to the change log' );
+	t_eq( (string) get_comment_meta( $c3, LivePull_Config::META_KEY, true ), '', 'new spam comment gets no sync ID' );
+	$data = array( 'post' => t_sid( $post ), 'c1' => t_sid( $c1, 'comment' ), 'c2' => t_sid( $c2, 'comment' ), 'c4' => t_sid( $c4, 'comment' ) );
 
 	if ( t_plugin_active( 'contact-form-7/wp-contact-form-7.php' ) ) {
 		$form = wp_insert_post( array( 'post_type' => 'wpcf7_contact_form', 'post_status' => 'publish', 'post_title' => 'Enquiry form' ) );
@@ -47,8 +55,34 @@ if ( 'verify' === $phase ) {
 	t_eq( $two ? (int) $two->comment_parent : 0, $c1, 'reply keeps its parent' );
 	t_eq( $one ? $one->comment_author_IP : 'x', '', "commenter's IP address is not copied" );
 	t_ok( $one && false !== strpos( $one->comment_content, home_url( '/about/' ) ), 'live address in a comment becomes local' );
-	t_eq( t_local( $s['c3'], 'comment' ), 0, 'spam is not pulled' );
-	t_eq( (int) get_comments_number( $post ), 2, 'comment count on the post' );
+	t_eq( (int) get_comments( array( 'author__in' => array(), 'search' => 'buy now', 'count' => true ) ), 0, 'spam is not pulled' );
+	t_eq( (string) get_comment_meta( $c1, 'rating', true ), '5', 'ordinary comment fields come across' );
+	t_eq( get_comment_meta( $c1, 'akismet_as_submitted', true ), '', 'Akismet data (with the IP address) stays on live' );
+	t_eq( (string) get_comment_meta( $c1, 'visitor_log', true ), '', 'any field holding the commenter IP stays on live' );
+	t_eq( (int) get_comments_number( $post ), 3, 'comment count on the post' );
+
+	// Groups switched off are refused even if live sends them.
+	LivePull_Config::save_groups( array( 'templates' => 1, 'forms' => 1, 'acf_options' => 1 ) );
+	t_ok( '' !== LivePull_Importer::refused( array( 'type' => 'comment', 'sync_id' => $s['c1'] ) ), 'comments are refused when switched off' );
+	LivePull_Config::save_groups( array( 'templates' => 1, 'forms' => 1, 'comments' => 1 ) );
+	t_ok( '' !== LivePull_Importer::refused( array( 'type' => 'option', 'sync_id' => LivePull_Config::option_sid( 'options_phone' ), 'option' => array( 'name' => 'options_phone' ) ) ), 'ACF options are refused when switched off' );
+	LivePull_Config::save_groups( array( 'templates' => 1, 'forms' => 1, 'comments' => 1, 'acf_options' => 1 ) );
+
+	// One pull or copy at a time.
+	$a = LivePull_Puller::lock_acquire( 'test' );
+	t_ok( '' !== $a, 'the lock can be taken' );
+	t_eq( LivePull_Puller::lock_acquire( 'test' ), '', 'a second run can\'t take the lock while the first holds it' );
+	t_ok( is_wp_error( LivePull_Puller::cancel() ), 'Unlock refuses while a run is active' );
+	t_ok( true === LivePull_Puller::cancel( $a ), 'a run can always stop itself' );
+	$b = LivePull_Puller::lock_acquire( 'test' );
+	t_ok( '' !== $b && ! LivePull_Puller::lock_renew( $a ), 'an old run finds the lock is no longer its own' );
+	LivePull_Puller::lock_release( $b );
+	t_eq( LivePull_Puller::lock_info(), null, 'releasing the lock removes it' );
+
+	// The connection check passes on a healthy pair of sites.
+	$fails = array_filter( LivePull_Health::run(), function ( $c ) { return 'fail' === $c['status']; } );
+	t_eq( count( $fails ), 0, 'connection check finds nothing wrong' );
+	t_ok( false === strpos( LivePull_Config::scrub( 'x https://cdn.example/a.jpg?X-Amz-Signature=s3cr3t y key ending …ab12' ), 's3cr3t' ), 'signed links lose their secrets in stored messages' );
 
 	if ( isset( $s['form'] ) ) {
 		$form = t_local( $s['form'] );
@@ -66,6 +100,9 @@ if ( 'verify' === $phase ) {
 	t_ok( $h && 'pull' === $h[0]['kind'] && $h[0]['created_count'] > 0, 'the pull is listed in History with what came across' );
 	LivePull_Schedule::save( 'daily', false );
 	t_ok( LivePull_Schedule::next() > time(), 'turning on daily pulls schedules the next one' );
+	wp_clear_scheduled_hook( LivePull_Schedule::HOOK ); // As Copy everything or a restore would.
+	LivePull_Schedule::ensure();
+	t_ok( LivePull_Schedule::next() > time(), 'a schedule lost in a copy or restore is put back' );
 	LivePull_Schedule::save( 'off', false );
 	t_eq( LivePull_Schedule::next(), 0, 'turning scheduled pulls off removes them' );
 
@@ -95,4 +132,22 @@ if ( 'verify_change' === $phase ) {
 	t_ok( $two && false !== strpos( $two->comment_content, 'edited locally' ), 'comment edited on both sides keeps the local edit' );
 	$conf = get_option( 'livepull_conflicts', array() );
 	t_ok( isset( $conf[ 'comment:' . $s['c2'] ] ), 'comment edited on both sides is listed as a conflict' );
+
+	// Compare and "Use live version" work for comments.
+	$rows = LivePull_Puller::compare( 'comment:' . $s['c2'] );
+	t_ok( ! is_wp_error( $rows ) && in_array( 'Comment', wp_list_pluck( (array) $rows, 'label' ), true ), 'Compare works for a comment conflict' );
+	$r = LivePull_Puller::take( 'comment:' . $s['c2'] );
+	$two = get_comment( t_local( $s['c2'], 'comment' ) );
+	t_ok( ! is_wp_error( $r ) && $two && false !== strpos( $two->comment_content, 'edited on live' ), '"Use live version" works for a comment' );
+
+	// A held-back comment can be pulled later.
+	$c4 = t_local( $s['c4'], 'comment' );
+	wp_delete_comment( $c4, true );
+	LivePull_Logger::insert( 'comment', $s['c4'], $c4, 'synced', 'sync' ); // As if it had never been pulled (not a local deletion).
+	update_option( LivePull_Puller::HELD, array( 'comment:' . $s['c4'] => array( 'label' => 'comment', 'group' => 'Comments', 'time' => time() ) ), false );
+	$state = LivePull_Puller::start( array( 'include_held' => array( 'comment:' . $s['c4'] ), 'skip_backup' => true ) );
+	for ( $i = 0; ! is_wp_error( $state ) && ! $state['done'] && $i < 50; $i++ ) {
+		$state = LivePull_Puller::step( $state, 20 );
+	}
+	t_ok( ! is_wp_error( $state ) && t_local( $s['c4'], 'comment' ) > 0, 'a held-back comment comes across when ticked' );
 }
