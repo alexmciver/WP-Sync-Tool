@@ -265,8 +265,11 @@ final class LivePull_Rest {
 		$has_more = count( $ids ) > $limit;
 		$ids      = array_slice( $ids, 0, $limit );
 
-		$items = array();
-		if ( 0 === $after ) {
+		$items  = array();
+		$cafter = max( 0, (int) $r['cafter'] );
+		// Settings and terms once, on the very first page. Later pages can still have
+		// $after = 0 (no posts changed, only comments), so the comment cursor counts too.
+		if ( 0 === $after && 0 === $cafter ) {
 			foreach ( LivePull_Config::pulled_option_names() as $n ) {
 				$item = LivePull_Exporter::option( $n );
 				if ( $item && empty( $item['deleted'] ) ) {
@@ -293,7 +296,6 @@ final class LivePull_Rest {
 		// Comments made since the date, a page at a time alongside the posts (only for
 		// sites that pull comments). They come after the posts in each page, so their
 		// posts are already there.
-		$cafter = max( 0, (int) $r['cafter'] );
 		$cmore  = false;
 		if ( ! empty( $r['comments'] ) ) {
 			$cids  = $wpdb->get_col( $wpdb->prepare(

@@ -78,6 +78,11 @@ if ( 'verify' === $phase ) {
 	t_ok( '' !== $b && ! LivePull_Puller::lock_renew( $a ), 'an old run finds the lock is no longer its own' );
 	LivePull_Puller::lock_release( $b );
 	t_eq( LivePull_Puller::lock_info(), null, 'releasing the lock removes it' );
+	// A pull abandoned mid-way (tab closed) mustn't block Copy everything for good.
+	update_option( LivePull_Puller::LOCK, array( 'owner' => 'gone', 'time' => time() - 3600, 'source' => 'manual' ), false );
+	$c = LivePull_Puller::lock_acquire( 'copy' );
+	t_ok( '' !== $c, 'an abandoned pull lock doesn\'t block Copy everything' );
+	LivePull_Puller::lock_release( $c );
 
 	// The connection check passes on a healthy pair of sites.
 	$fails = array_filter( LivePull_Health::run(), function ( $c ) { return 'fail' === $c['status']; } );
@@ -109,6 +114,32 @@ if ( 'verify' === $phase ) {
 	$img  = t_local( $s['img'] );
 	$file = $img ? get_attached_file( $img ) : '';
 	t_ok( $file && file_exists( $file ) && filesize( $file ) > 0, 'offloaded media downloaded from the fallback address' );
+}
+
+if ( 'verify' === $phase && class_exists( 'LivePull_Updater' ) ) {
+	// Signed updates: good, tampered, wrong key, junk.
+	$kp   = sodium_crypto_sign_keypair();
+	$pub  = base64_encode( sodium_crypto_sign_publickey( $kp ) );
+	$data = 'release bytes';
+	$sig  = base64_encode( sodium_crypto_sign_detached( $data, sodium_crypto_sign_secretkey( $kp ) ) );
+	t_ok( LivePull_Updater::signature_ok( $sig, $data, $pub ), 'a correctly signed update passes' );
+	t_ok( ! LivePull_Updater::signature_ok( $sig, $data . 'x', $pub ), 'a changed update fails its signature' );
+	t_ok( ! LivePull_Updater::signature_ok( $sig, $data, base64_encode( sodium_crypto_sign_publickey( sodium_crypto_sign_keypair() ) ) ), 'a signature by another key fails' );
+	t_ok( ! LivePull_Updater::signature_ok( 'junk', $data, $pub ), 'a junk signature fails' );
+	t_ok( ! LivePull_Updater::signature_ok( $sig, $data ), 'only the built-in key is trusted for real updates' );
+
+	// The version inside an update must be the one it was offered as, and newer.
+	$zip = wp_tempnam( 'lp-test' ) . '.zip';
+	$z   = new ZipArchive();
+	$z->open( $zip, ZipArchive::CREATE );
+	$z->addFromString( 'livepull/livepull.php', "<?php\n/**\n * Plugin Name: LivePull\n * Version:           9.9.9\n */" );
+	$z->close();
+	$url = function ( $v ) { return 'https://github.com/alexmciver/WP-Sync-Tool/releases/download/v' . $v . '/livepull.zip'; };
+	t_ok( true === LivePull_Updater::version_ok( $url( '9.9.9' ), $zip, '1.2.1' ), 'an update with the version it claims installs' );
+	t_ok( is_wp_error( LivePull_Updater::version_ok( $url( '9.9.10' ), $zip, '1.2.1' ) ), 'an update whose version differs from the release is refused' );
+	t_ok( is_wp_error( LivePull_Updater::version_ok( $url( '9.9.9' ), $zip, '9.9.9' ) ), 'an update that isn\'t newer is refused' );
+	@unlink( $zip );
+	t_ok( LivePull_Updater::trusted_package( $url( '1.3.0' ) ) && ! LivePull_Updater::trusted_package( 'https://github.com/someone-else/WP-Sync-Tool/releases/download/v1.3.0/livepull.zip' ), 'updates only come from this repository\'s releases' );
 }
 
 if ( 'local_change' === $phase ) {
@@ -150,4 +181,27 @@ if ( 'verify_change' === $phase ) {
 		$state = LivePull_Puller::step( $state, 20 );
 	}
 	t_ok( ! is_wp_error( $state ) && t_local( $s['c4'], 'comment' ) > 0, 'a held-back comment comes across when ticked' );
+
+	// Copy everything: live's "list of uploads expired" answer reaches the copy as such,
+	// so it lists again instead of skipping the media.
+	$res = LivePull_Puller::client()->get( 'files', array( 'offset' => 5, 'limit' => 10, 'token' => wp_generate_password( 20, false ) ) );
+	t_eq( is_wp_error( $res ) ? $res->get_error_code() : 'no error', 'livepull_listing_gone', 'an expired uploads list is recognised (so Copy everything lists again)' );
+
+	// Scheduled pulls: a run is recorded; a failure emails once, not every run.
+	LivePull_Schedule::save( 'hourly', true );
+	$mails = 0;
+	add_filter( 'pre_wp_mail', function () use ( &$mails ) { $mails++; return true; } );
+	$r = LivePull_Schedule::run();
+	$h = LivePull_History::all();
+	t_ok( ! is_wp_error( $r ) && 'scheduled' === $h[0]['source'], 'a scheduled pull runs and is listed in History' );
+	$real = get_option( 'livepull_remote_secret' );
+	update_option( 'livepull_remote_secret', str_repeat( 'x', 64 ) );
+	LivePull_Schedule::run();
+	LivePull_Schedule::run();
+	t_eq( $mails, 1, 'a failing schedule emails once, not every run' );
+	update_option( 'livepull_remote_secret', $real );
+	LivePull_Schedule::run();
+	$st = LivePull_Schedule::settings();
+	t_ok( empty( $st['failing'] ), 'a working run clears the failure' );
+	LivePull_Schedule::save( 'off', false );
 }

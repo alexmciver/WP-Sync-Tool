@@ -2,6 +2,18 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.2.2
+Fixes from the 1.2.1 review.
+- **Copy everything** is no longer blocked for good by a pull that was abandoned (for example a tab closed mid-pull). It takes over an abandoned lock the way Pull does.
+- **The pull lock** only ever changes the exact lock it checked, so a takeover landing at the same moment is never overwritten or removed.
+- **Full scans** send settings and categories once, not with every page of comments.
+- **History, emails and bug reports** only hide real key endings ("…a1b2"), not ordinary words like "ending".
+- **Updates** are only trusted from this repository's releases (and its planned new name), not any GitHub address.
+- **Scheduled pulls** too big for one run are recorded as progress, not emailed as a failure; the next run carries on.
+- **ACF options pages** are off by default since 1.2.1. If you pulled them on 1.2.0, switch them back on under Settings → What to pull.
+- The README and readme.txt now say up front that conflicts are never overwritten and that live's content and settings are never changed.
+- Tidier code comments, and tests for the update signature and version checks, scheduled runs, the expired uploads list and abandoned locks.
+
 ## 1.2.1
 Fixes from the 1.2.0 review.
 - **Comments:** Compare, "Use live version" and held-back comments now work (live's single-item route accepted posts, terms and settings only). Replies whose parent isn't local yet keep their threading.

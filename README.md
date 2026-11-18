@@ -2,6 +2,8 @@
 
 **Pull your client's content changes from a live WordPress site into your local copy — without overwriting your own work.**
 
+Changed in both places? It's flagged as a conflict, never overwritten. And it only ever reads from live: your client's content and settings there are never changed.
+
 You're building or fixing something on a local or staging copy. Meanwhile the client keeps adding posts, pages, products and images on the live site. Normally you either work on stale content or copy the whole database down again and lose your changes. LivePull gives you a third option: bring across just what changed on live, and leave anything you've changed locally alone.
 
 - **Pull changes** – new and edited posts, pages, custom post types, media, categories/tags, custom fields, menus and key site settings. Optionally templates, forms, comments and ACF options pages.

@@ -392,9 +392,6 @@ final class LivePull_Full {
 		if ( empty( $remote['full_copy'] ) ) {
 			return new WP_Error( 'livepull_full_off', 'Copy everything is switched off on the live site (it shares the whole database, so it\'s off by default). On live, open Tools → LivePull → "Let other sites pull from this one" and click "Allow for 1 hour", then try again here.' );
 		}
-		if ( LivePull_Puller::lock_info() ) {
-			return new WP_Error( 'livepull_locked', 'A pull is running. Wait for it to finish, or cancel it.' );
-		}
 		$list = self::client()->get( 'db-tables' );
 		if ( is_wp_error( $list ) ) {
 			return $list;

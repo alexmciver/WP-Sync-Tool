@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.1
+Stable tag: 1.2.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,7 +14,7 @@ Pull the posts, pages, products and media your client adds on the live site into
 
 You're building new features on a local copy of a site. Meanwhile, your client keeps adding blog posts, products and pages on the live site. Normally that leaves you two choices: copy the whole live database down and lose your local work, or copy their changes over by hand.
 
-**LivePull pulls just the content that changed on live into your local site, and leaves everything you changed locally alone.**
+**LivePull pulls just the content that changed on live into your local site, and leaves everything you changed locally alone.** Anything changed in both places is flagged as a conflict, never overwritten. And it only ever reads from live: your client's content and settings there are never changed.
 
 * **Only what changed.** LivePull keeps a record of content changes on live, and each pull brings over only what's new since the last one.
 * **You choose what comes across.** *Check for changes* lists everything that changed on live with a tick box for each. Anything you untick is held back for later, not lost.
@@ -92,6 +92,11 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.2.2 =
+* Copy everything is no longer blocked by a pull that was abandoned part-way.
+* Safer handling of the pull lock, full scans and update addresses.
+* Scheduled pulls too big for one run carry on next time without a failure email.
+
 = 1.2.1 =
 * Comment conflicts: Compare, "Use live version" and held-back comments now work.
 * Commenters' IP addresses and anti-spam data never leave live, and live only sends comments to sites that pull them.
@@ -126,8 +131,11 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Upgrade Notice ==
 
+= 1.2.2 =
+Fixes Copy everything being blocked after an abandoned pull. Note: since 1.2.1, ACF options pages are off by default; if you pulled them on 1.2.0, switch them back on under Settings → What to pull.
+
 = 1.2.1 =
-Fixes comment conflicts, keeps commenter IP addresses on live and makes sure only one pull runs at a time. Update both sites.
+ACF options pages are now off by default: if you pulled them on 1.2.0, switch them back on under Settings → What to pull. Also fixes comment conflicts, keeps commenter IP addresses on live and makes sure only one pull runs at a time. Update both sites.
 
 = 1.2.0 =
 A simpler screen, choose what to pull, history, scheduled pulls and a connection check. Update both your live and local sites.

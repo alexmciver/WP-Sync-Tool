@@ -339,7 +339,6 @@ final class LivePull_Backup {
 		return $done;
 	}
 
-	/** Keep the newest backups, plus $keep (the backup about to be restored). */
 	/**
 	 * Keep the newest backups of each kind separately: KEEP before pulls, KEEP_COPY before
 	 * full copies. Frequent (e.g. hourly scheduled) pulls then never push out the backup

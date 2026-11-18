@@ -251,11 +251,17 @@ final class LivePull_Updater {
 		return $update;
 	}
 
-	/** Only ever install packages served by GitHub over HTTPS. */
+	/**
+	 * Only ever install livepull.zip from a release of this repository, over HTTPS.
+	 * (GitHub then redirects the download to its file servers.) The planned new name of
+	 * the repository is allowed too, so updates keep working after it's renamed.
+	 */
 	public static function trusted_package( $url ) {
-		$host = strtolower( (string) wp_parse_url( (string) $url, PHP_URL_HOST ) );
-		return 'https' === wp_parse_url( (string) $url, PHP_URL_SCHEME )
-			&& in_array( $host, array( 'github.com', 'api.github.com', 'codeload.github.com', 'objects.githubusercontent.com' ), true );
+		$url   = (string) $url;
+		$repos = array_map( 'preg_quote', array( self::REPO, 'alexmciver/LivePull' ) );
+		return 'https' === wp_parse_url( $url, PHP_URL_SCHEME )
+			&& 'github.com' === strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) )
+			&& (bool) preg_match( '#^/(' . implode( '|', $repos ) . ')/releases/download/v?[0-9][0-9A-Za-z.\-]*/livepull\.zip$#i', (string) wp_parse_url( $url, PHP_URL_PATH ) );
 	}
 
 	/**
@@ -322,13 +328,13 @@ final class LivePull_Updater {
 	 *
 	 * @return true|WP_Error
 	 */
-	public static function version_ok( $package, $file ) {
+	public static function version_ok( $package, $file, $installed = null ) {
 		$fail = new WP_Error( 'livepull_version', 'This LivePull download isn\'t the version it claimed to be, so it was not installed.' );
 		if ( ! preg_match( '#/releases/download/v?([0-9][0-9A-Za-z.\-]*)/livepull\.zip$#', (string) $package, $m ) ) {
 			return $fail;
 		}
 		$inside = self::zip_version( $file );
-		if ( ! $inside || $inside !== $m[1] || ! version_compare( $inside, LivePull_Config::VERSION, '>' ) ) {
+		if ( ! $inside || $inside !== $m[1] || ! version_compare( $inside, null === $installed ? LivePull_Config::VERSION : (string) $installed, '>' ) ) {
 			return $fail;
 		}
 		return true;
@@ -354,10 +360,13 @@ final class LivePull_Updater {
 		return preg_match( '/^[ \t\/*#@]*Version:\s*([0-9][0-9A-Za-z.\-]*)/mi', substr( $php, 0, 8192 ), $m ) ? $m[1] : '';
 	}
 
-	/** True when $sig (base64) is a valid signature of $data by SIGNING_KEY. */
-	public static function signature_ok( $sig, $data ) {
+	/**
+	 * True when $sig (base64) is a valid signature of $data by SIGNING_KEY. $key (base64) is
+	 * only for tests; updates are always checked against SIGNING_KEY.
+	 */
+	public static function signature_ok( $sig, $data, $key = null ) {
 		$sig = base64_decode( (string) $sig, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- signature encoding.
-		$key = base64_decode( self::SIGNING_KEY, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- key encoding.
+		$key = base64_decode( null === $key ? self::SIGNING_KEY : (string) $key, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- key encoding.
 		if ( ! $sig || ! $key || 64 !== strlen( $sig ) || 32 !== strlen( $key ) ) {
 			return false;
 		}

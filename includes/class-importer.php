@@ -133,12 +133,12 @@ final class LivePull_Importer {
 		}
 	}
 
-	/** Replace live URLs with local ones inside strings / arrays (never inside raw serialized strings). */
 	/** Live's value with live addresses switched to this site's, for comparing. */
 	public function localise( $value ) {
 		return $this->urls( $value );
 	}
 
+	/** Replace live URLs with local ones inside strings / arrays (never inside raw serialized strings). */
 	private function urls( $value ) {
 		if ( ! $this->url_from ) {
 			return $value;
@@ -989,7 +989,6 @@ final class LivePull_Importer {
 		return $id;
 	}
 
-	/** Make this object's meta match live's (except keys handled in the refs pass). */
 	/**
 	 * Make this object's meta match live's (except keys handled in the refs pass).
 	 * Values are copied byte for byte – only URLs are rewritten, safely inside serialized

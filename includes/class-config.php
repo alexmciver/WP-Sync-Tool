@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.2.1';
+	const VERSION  = '1.2.2';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */
@@ -68,7 +68,8 @@ final class LivePull_Config {
 	 */
 	public static function scrub( $text ) {
 		$text = preg_replace( '#\b(https?://[^\s?"\'<>]+)\?[^\s"\'<>]*#i', '$1?…', (string) $text );
-		return preg_replace( '/(key ending|ends in|ending)\s*…?[A-Za-z0-9+\/=]{4}\b/iu', '$1 ****', $text );
+		// Key hints always look like "…a1b2" (see key_hint()), so only that shape is hidden.
+		return preg_replace( '/…[A-Za-z0-9]{4}(?![A-Za-z0-9])/u', '…****', $text );
 	}
 
 	public static function page_size() {
@@ -149,10 +150,6 @@ final class LivePull_Config {
 	}
 
 	/**
-	 * Does this site want this incoming item? False for anything in an optional group that is
-	 * switched off here (it is skipped quietly, as if live hadn't sent it).
-	 */
-	/**
 	 * Comment fields that hold the commenter's IP address, browser or spam-check history
 	 * (Akismet, Antispam Bee and similar). Never sent or saved by a pull.
 	 */
@@ -160,6 +157,10 @@ final class LivePull_Config {
 		return (bool) preg_match( '/akismet|antispam|spam|(^|_)ip($|_)|ip_address|user_?agent|remote_addr/i', (string) $key );
 	}
 
+	/**
+	 * Does this site want this incoming item? False for anything in an optional group that is
+	 * switched off here (it is skipped quietly, as if live hadn't sent it).
+	 */
 	public static function wanted( array $item ) {
 		$type = isset( $item['type'] ) ? $item['type'] : '';
 		if ( 'comment' === $type ) {
@@ -460,12 +461,6 @@ final class LivePull_Config {
 	}
 
 	/**
-	 * Detect that this database was copied from another site (its URL changed since we last
-	 * saw it). Everything already in the copied log happened on the source site, so it must not
-	 * count as "changed locally", and the copy already contains it, so pulling starts after it.
-	 * Stored as a hash so search-replace during a migration can't rewrite it.
-	 */
-	/**
 	 * This site's address, normalised: home_url() switches between http:// and https://
 	 * with the current request, which must not look like "this site moved".
 	 */
@@ -475,6 +470,12 @@ final class LivePull_Config {
 		return md5( $home );
 	}
 
+	/**
+	 * Detect that this database was copied from another site (its URL changed since we last
+	 * saw it). Everything already in the copied log happened on the source site, so it must not
+	 * count as "changed locally", and the copy already contains it, so pulling starts after it.
+	 * Stored as a hash so search-replace during a migration can't rewrite it.
+	 */
 	public static function detect_clone() {
 		$fp     = self::fingerprint();
 		$stored = get_option( 'livepull_fingerprint' );

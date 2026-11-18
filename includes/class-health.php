@@ -13,9 +13,6 @@ defined( 'ABSPATH' ) || exit;
 
 class LivePull_Health {
 
-	/**
-	 * Run every check. @return array List of array( status: ok|warn|fail, title, detail, fix ).
-	 */
 	/** The staging password header (LIVEPULL_REMOTE_BASIC_AUTH), as the client sends it. */
 	private static function basic_auth() {
 		return defined( 'LIVEPULL_REMOTE_BASIC_AUTH' ) && LIVEPULL_REMOTE_BASIC_AUTH ? array( 'Authorization' => 'Basic ' . base64_encode( LIVEPULL_REMOTE_BASIC_AUTH ) ) : array(); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- HTTP basic auth.
@@ -44,6 +41,9 @@ class LivePull_Health {
 		return $res;
 	}
 
+	/**
+	 * Run every check. @return array List of array( status: ok|warn|fail, title, detail, fix ).
+	 */
 	public static function run() {
 		$checks = array();
 		$add    = function ( $status, $title, $detail = '', $fix = '' ) use ( &$checks ) {
@@ -319,12 +319,12 @@ class LivePull_Health {
 		return LivePull_Config::scrub( implode( "\n", $lines ) );
 	}
 
-	/** A pre-filled "new issue" link on GitHub (long reports are cut; the full text is copied). */
 	/** True for the GitHub download (it has the updater); false for the WordPress.org copy. */
 	public static function from_github() {
 		return class_exists( 'LivePull_Updater' );
 	}
 
+	/** Where to report a problem: a pre-filled GitHub issue (long reports are cut; the full text is copied), or the WordPress.org forum. */
 	public static function issue_url( $text ) {
 		if ( ! self::from_github() ) {
 			return 'https://wordpress.org/support/plugin/livepull/#new-topic-0';

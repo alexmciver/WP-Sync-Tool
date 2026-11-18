@@ -465,73 +465,78 @@ final class LivePull_Puller {
 	const LOCK_STALE = 900;  // Abandoned after 15 minutes without a sign of life.
 	const LOCK_QUIET = 180;  // "Unlock" is only allowed once a run has been quiet this long.
 
-	/** @return array{owner:string,time:int,source:string}|null straight from the database. */
-	public static function lock_info() {
+	/** The lock row as stored (raw) and read (parsed), straight from the database. */
+	private static function lock_row() {
 		global $wpdb;
 		$raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
-		$v   = null === $raw ? null : maybe_unserialize( $raw );
-		return is_array( $v ) && isset( $v['owner'], $v['time'] ) ? $v + array( 'source' => '' ) : ( null === $raw ? null : array( 'owner' => '', 'time' => 0, 'source' => '' ) );
+		if ( null === $raw ) {
+			return array( null, null );
+		}
+		$v = maybe_unserialize( $raw );
+		$v = is_array( $v ) && isset( $v['owner'], $v['time'] ) ? $v + array( 'source' => '' ) : array( 'owner' => '', 'time' => 0, 'source' => '' );
+		return array( $raw, $v );
+	}
+
+	/** @return array{owner:string,time:int,source:string}|null straight from the database. */
+	public static function lock_info() {
+		list( , $v ) = self::lock_row();
+		return $v;
+	}
+
+	/**
+	 * Every change below is "compare and swap": it only applies if the row still holds exactly
+	 * what was checked, so a takeover that lands in between is never overwritten or deleted.
+	 */
+	private static function lock_swap( $raw, $new ) {
+		global $wpdb;
+		if ( null === $new ) {
+			$n = $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s", self::LOCK, $raw ) );
+		} elseif ( null === $raw ) {
+			$n = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", self::LOCK, $new ) );
+		} elseif ( $raw === $new ) {
+			return true; // Renewed twice in the same second: nothing to change.
+		} else {
+			$n = $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $new, self::LOCK, $raw ) );
+		}
+		wp_cache_delete( self::LOCK, 'options' );
+		return 1 === (int) $n;
 	}
 
 	/** Claim the lock. @return string token, or '' if another run holds it. */
 	public static function lock_acquire( $source, $take_over = false ) {
-		global $wpdb;
 		$token = wp_generate_password( 24, false );
 		$value = maybe_serialize( array( 'owner' => $token, 'time' => time(), 'source' => (string) $source ) );
-		$ok    = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", self::LOCK, $value ) );
-		if ( 1 !== (int) $ok ) {
-			$cur = self::lock_info();
-			if ( $cur && ! $take_over && time() - (int) $cur['time'] < self::LOCK_STALE ) {
-				return '';
-			}
-			// Abandoned (or taking over on purpose): replace exactly the row we looked at.
-			$old = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
-			$ok  = null === $old
-				? $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", self::LOCK, $value ) )
-				: $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $value, self::LOCK, $old ) );
-			if ( 1 !== (int) $ok ) {
-				return '';
-			}
+		list( $raw, $cur ) = self::lock_row();
+		if ( $cur && ! $take_over && time() - (int) $cur['time'] < self::LOCK_STALE ) {
+			return '';
 		}
-		wp_cache_delete( self::LOCK, 'options' );
-		return $token;
+		// Free, abandoned, or taking over on purpose: replace exactly the row we looked at.
+		return self::lock_swap( $raw, $value ) ? $token : '';
 	}
 
 	/** Renew our lock. @return bool false if it's no longer ours (stop running). */
 	public static function lock_renew( $token ) {
-		global $wpdb;
-		$cur = self::lock_info();
+		list( $raw, $cur ) = self::lock_row();
 		if ( ! $token || ! $cur || ! hash_equals( (string) $cur['owner'], (string) $token ) ) {
 			return false;
 		}
-		$old = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
-		$new = maybe_serialize( array( 'owner' => $token, 'time' => time(), 'source' => $cur['source'] ) );
-		return 1 === (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $new, self::LOCK, $old ) ) || $old === $new;
+		return self::lock_swap( $raw, maybe_serialize( array( 'owner' => $token, 'time' => time(), 'source' => $cur['source'] ) ) );
 	}
 
 	/** Let go of our lock (only ours). */
 	public static function lock_release( $token ) {
-		global $wpdb;
-		$cur = self::lock_info();
+		list( $raw, $cur ) = self::lock_row();
 		if ( $token && $cur && hash_equals( (string) $cur['owner'], (string) $token ) ) {
-			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
-			wp_cache_delete( self::LOCK, 'options' );
+			self::lock_swap( $raw, null );
 		}
 	}
 
 	/** Let go of a lock held by a given kind of run (e.g. a copy that is being abandoned). */
 	public static function lock_release_source( $source ) {
-		$cur = self::lock_info();
+		list( $raw, $cur ) = self::lock_row();
 		if ( $cur && $source === $cur['source'] ) {
-			self::lock_clear();
+			self::lock_swap( $raw, null );
 		}
-	}
-
-	/** Remove whoever holds the lock (after checking it's safe to). */
-	private static function lock_clear() {
-		global $wpdb;
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", self::LOCK ) );
-		wp_cache_delete( self::LOCK, 'options' );
 	}
 
 	/**
@@ -542,12 +547,12 @@ final class LivePull_Puller {
 	 * @return true|WP_Error
 	 */
 	public static function cancel( $token = '' ) {
-		$cur = self::lock_info();
+		list( $raw, $cur ) = self::lock_row();
 		if ( ! $cur ) {
 			return true;
 		}
 		if ( $token && hash_equals( (string) $cur['owner'], (string) $token ) ) {
-			self::lock_clear();
+			self::lock_swap( $raw, null );
 			return true;
 		}
 		$idle = time() - (int) $cur['time'];
@@ -564,7 +569,7 @@ final class LivePull_Puller {
 				human_time_diff( (int) $cur['time'] )
 			) );
 		}
-		self::lock_clear();
+		self::lock_swap( $raw, null );
 		return true;
 	}
 

@@ -92,10 +92,13 @@ class LivePull_Schedule {
 		while ( ! is_wp_error( $state ) && ! $state['done'] && $i++ < 500 ) {
 			$state = LivePull_Puller::step( $state, 20 );
 		}
+		$more = false;
 		if ( ! is_wp_error( $state ) && ! $state['done'] ) {
-			// Ran out of steps (a very big catch-up). What's done is saved; the next run continues.
+			// Ran out of steps (a very big catch-up). That's progress, not a failure: what came
+			// across is saved and recorded, and the next run carries on from there.
 			LivePull_Puller::cancel( $state['lock'] );
-			$state = new WP_Error( 'livepull_unfinished', __( 'The scheduled pull had more to do than fits in one run. What came across is kept, and the next run carries on.', 'livepull' ) );
+			$more = true;
+			LivePull_History::add( 'pull', $state['report'], array( 'source' => 'scheduled', 'backup' => isset( $state['backup_file'] ) ? $state['backup_file'] : '', 'note' => __( 'More to do: the next scheduled pull carries on.', 'livepull' ) ) );
 		}
 		if ( is_wp_error( $state ) && 'livepull_locked' === $state->get_error_code() ) {
 			return $state; // Another pull is running: skip quietly and keep the last result as it was.
@@ -114,6 +117,9 @@ class LivePull_Schedule {
 				'errors_count'    => count( $report['errors'] ),
 				'files'           => $report['files'],
 			) );
+			if ( $more ) {
+				$result .= ' ' . __( '(more to do: the next run carries on)', 'livepull' );
+			}
 		}
 		$failed_before    = ! empty( $s['failing'] );
 		$s['last_run']    = time();
