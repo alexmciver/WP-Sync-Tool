@@ -1,4 +1,4 @@
-# LivePull
+<p align="center"><img src="docs/logo.png" alt="LivePull" width="380"></p>
 
 **Pull your client's content changes from a live WordPress site into your local copy — without overwriting your own work.**
 

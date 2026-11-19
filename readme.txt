@@ -88,7 +88,11 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Screenshots ==
 
-1. Pulling changes from live on the local site.
+1. Check for changes: everything that changed on live, with a tick box for each. Untick anything you don't want yet.
+2. Conflicts: changed on live and on your copy. Compare the two side by side, then choose which to keep.
+3. History: every pull, including scheduled ones, and what each brought across.
+4. Settings: what to pull, scheduled pulls, a connection check and Report a problem.
+5. The live site's screen: copy the connection code into your local site. That's all.
 
 == Changelog ==
 

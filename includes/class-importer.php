@@ -277,6 +277,15 @@ final class LivePull_Importer {
 		);
 	}
 
+	/** A setting as people know it: "Site title", not "blogname". */
+	public static function setting_label( $name ) {
+		$nice = array( 'blogname' => 'Site title', 'blogdescription' => 'Tagline', 'show_on_front' => 'Homepage displays', 'page_on_front' => 'Homepage', 'page_for_posts' => 'Posts page', 'sticky_posts' => 'Sticky posts', 'site_icon' => 'Site icon' );
+		if ( 0 === strpos( (string) $name, 'theme_mods_' ) ) {
+			return 'setting "Menu locations / logo"';
+		}
+		return 'setting "' . ( isset( $nice[ $name ] ) ? $nice[ $name ] : $name ) . '"';
+	}
+
 	private static function label( $item, $local_id = 0 ) {
 		if ( 'comment' === $item['type'] ) {
 			if ( isset( $item['comment'] ) ) {
@@ -286,12 +295,7 @@ final class LivePull_Importer {
 			return $c ? sprintf( 'comment by %s on "%s"', $c->comment_author, get_the_title( $c->comment_post_ID ) ) : 'comment';
 		}
 		if ( 'option' === $item['type'] ) {
-			$name = isset( $item['option']['name'] ) ? $item['option']['name'] : self::option_name( $item['sync_id'] );
-			$nice = array( 'blogname' => 'Site title', 'blogdescription' => 'Tagline', 'show_on_front' => 'Homepage displays', 'page_on_front' => 'Homepage', 'page_for_posts' => 'Posts page', 'sticky_posts' => 'Sticky posts', 'site_icon' => 'Site icon' );
-			if ( 0 === strpos( (string) $name, 'theme_mods_' ) ) {
-				return 'setting "Menu locations / logo"';
-			}
-			return 'setting "' . ( isset( $nice[ $name ] ) ? $nice[ $name ] : $name ) . '"';
+			return self::setting_label( isset( $item['option']['name'] ) ? $item['option']['name'] : self::option_name( $item['sync_id'] ) );
 		}
 		if ( 'term' === $item['type'] ) {
 			$t = isset( $item['term'] ) ? $item['term'] : array();

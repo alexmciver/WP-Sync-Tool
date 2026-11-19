@@ -33,7 +33,7 @@ A volunteer reviewer reads the code and emails you. The queue has been long in 2
 3. On GitHub: *WP-Sync-Tool → Settings → Secrets and variables → Actions → New repository secret*. Add:
    - `SVN_USERNAME`: your WordPress.org username
    - `SVN_PASSWORD`: the SVN password from step 2
-4. *Actions → Release → Run workflow*. This publishes the current version, the banner, the icon and the screenshot to WordPress.org.
+4. *Actions → Release → Run workflow*. This publishes the current version, the banners, the icon and the screenshots in `.wordpress-org` to WordPress.org.
 
 ## From then on
 

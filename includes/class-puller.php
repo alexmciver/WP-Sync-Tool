@@ -784,7 +784,7 @@ final class LivePull_Puller {
 			list( $type, $sid ) = explode( ':', $key, 2 );
 			if ( 'option' === $type ) {
 				$n      = LivePull_Importer::option_name( $sid );
-				$rows[] = array( 'id' => 0, 'item' => 0 === strpos( $n, 'theme_mods_' ) ? 'setting "Menu locations / logo"' : 'setting "' . $n . '"', 'action' => 'edited', 'edit' => '' );
+				$rows[] = array( 'id' => 0, 'item' => LivePull_Importer::setting_label( $n ), 'action' => 'edited', 'edit' => '' );
 				continue;
 			}
 			if ( 'comment' === $type ) {
