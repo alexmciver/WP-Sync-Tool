@@ -2,6 +2,9 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.2.3
+- The WordPress Updates screen now shows LivePull as compatible with your WordPress version instead of "Not tested". The updater passes on "Tested up to", "Requires at least" and "Requires PHP" from the release's readme, the way WordPress.org does (tested with 7.1 counts for every 7.1.x). This takes effect for updates after 1.2.3.
+
 ## 1.2.2
 Fixes from the 1.2.1 review.
 - **Copy everything** is no longer blocked for good by a pull that was abandoned (for example a tab closed mid-pull). It takes over an abandoned lock the way Pull does.

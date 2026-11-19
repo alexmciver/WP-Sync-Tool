@@ -63,6 +63,9 @@ final class LivePull_Updater {
 		if ( ! $data ) {
 			$data = self::from_redirect( $errors ); // Fallback: no API, no rate limit.
 		}
+		if ( $data ) {
+			$data += self::readme_headers( $data['version'] );
+		}
 		update_option( 'livepull_update_error', $data ? '' : implode( ' / ', $errors ), false );
 		// Cache failures briefly too, so a GitHub outage doesn't slow every admin page.
 		set_site_transient( self::CACHE, $data ? $data : array(), $data ? self::CACHE_TTL : 15 * MINUTE_IN_SECONDS );
@@ -72,6 +75,35 @@ final class LivePull_Updater {
 	/** Why the last check failed ('' if it worked). */
 	public static function last_error() {
 		return (string) get_option( 'livepull_update_error', '' );
+	}
+
+	/**
+	 * "Tested up to", "Requires at least" and "Requires PHP" from the release's readme.txt,
+	 * so WordPress can show whether the update is compatible (otherwise it says "Not tested").
+	 */
+	private static function readme_headers( $version ) {
+		$out = array( 'tested' => '', 'requires' => '', 'requires_php' => '7.4' );
+		$res = wp_remote_get( 'https://raw.githubusercontent.com/' . self::REPO . '/v' . rawurlencode( $version ) . '/readme.txt', array( 'timeout' => 10, 'headers' => array( 'User-Agent' => 'LivePull-Updater', 'Range' => 'bytes=0-2047' ) ) );
+		$txt = is_wp_error( $res ) || ! in_array( (int) wp_remote_retrieve_response_code( $res ), array( 200, 206 ), true ) ? '' : substr( (string) wp_remote_retrieve_body( $res ), 0, 2048 );
+		foreach ( array( 'tested' => 'Tested up to', 'requires' => 'Requires at least', 'requires_php' => 'Requires PHP' ) as $k => $label ) {
+			if ( preg_match( '/^' . preg_quote( $label, '/' ) . ':\s*([0-9][0-9.]*)\s*$/mi', $txt, $m ) ) {
+				$out[ $k ] = $m[1];
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * WordPress compares "Tested up to" with its full version, and WordPress.org reports the
+	 * newest minor release of the tested branch. Do the same: tested with 7.1 means 7.1.x.
+	 */
+	public static function tested_for_wp( $tested, $wp ) {
+		$tested = (string) $tested;
+		if ( '' === $tested ) {
+			return '';
+		}
+		$branch = implode( '.', array_slice( explode( '.', (string) $wp ), 0, 2 ) );
+		return $branch === implode( '.', array_slice( explode( '.', $tested ), 0, 2 ) ) && version_compare( $wp, $tested, '>' ) ? (string) $wp : $tested;
 	}
 
 	private static function from_api( array &$errors ) {
@@ -141,7 +173,9 @@ final class LivePull_Updater {
 			'new_version'   => $r ? $r['version'] : LivePull_Config::VERSION,
 			'url'           => 'https://github.com/' . self::REPO,
 			'package'       => $r ? $r['package'] : '',
-			'requires_php'  => '7.4',
+			'requires_php'  => $r && ! empty( $r['requires_php'] ) ? $r['requires_php'] : '7.4',
+			'requires'      => $r && ! empty( $r['requires'] ) ? $r['requires'] : '',
+			'tested'        => $r && ! empty( $r['tested'] ) ? self::tested_for_wp( $r['tested'], get_bloginfo( 'version' ) ) : '',
 			'icons'         => array(),
 			'banners'       => array(),
 			'compatibility' => new stdClass(),
@@ -182,7 +216,9 @@ final class LivePull_Updater {
 			'version'       => $r ? $r['version'] : LivePull_Config::VERSION,
 			'author'        => '<a href="https://alexmwebdesign.co.uk">Alex M Web Design</a>',
 			'homepage'      => 'https://github.com/' . self::REPO,
-			'requires_php'  => '7.4',
+			'requires_php'  => $r && ! empty( $r['requires_php'] ) ? $r['requires_php'] : '7.4',
+			'requires'      => $r && ! empty( $r['requires'] ) ? $r['requires'] : '',
+			'tested'        => $r && ! empty( $r['tested'] ) ? self::tested_for_wp( $r['tested'], get_bloginfo( 'version' ) ) : '',
 			'last_updated'  => $r ? $r['published'] : '',
 			'download_link' => $r ? $r['package'] : '',
 			'sections'      => array(
