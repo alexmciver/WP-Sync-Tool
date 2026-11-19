@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.2
+Stable tag: 1.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,11 +96,15 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.2.4 =
+* Conflicts found by "Check for changes" can be compared and decided straight away, before pulling.
+* "Keep mine" chosen before a pull sticks.
+* GitHub updates show which WordPress versions they're tested with, instead of "Not tested".
+
 = 1.2.2 =
 * Copy everything is no longer blocked by a pull that was abandoned part-way.
 * Safer handling of the pull lock, full scans and update addresses.
 * Scheduled pulls too big for one run carry on next time without a failure email.
-* GitHub updates show which WordPress versions they're tested with, instead of "Not tested".
 
 = 1.2.1 =
 * Comment conflicts: Compare, "Use live version" and held-back comments now work.
@@ -135,6 +139,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.2.4 =
+Compare and decide conflicts as soon as "Check for changes" finds them. Update both your live and local sites.
 
 = 1.2.2 =
 Fixes Copy everything being blocked after an abandoned pull. Note: since 1.2.1, ACF options pages are off by default; if you pulled them on 1.2.0, switch them back on under Settings → What to pull.
