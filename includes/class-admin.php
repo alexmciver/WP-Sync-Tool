@@ -387,7 +387,7 @@ final class LivePull_Admin {
 
 		<?php // ----------------------------------------------------------- Conflicts ?>
 		<section class="livepull-panel" data-panel="conflicts" <?php echo 'conflicts' === $tab ? '' : 'hidden'; ?>>
-			<p class="description"><?php self::kses_e( __( 'These changed on live <em>and</em> here since the last pull. Your version was kept. <strong>Compare</strong> shows the differences side by side.', 'livepull' ) ); ?></p>
+			<p class="description"><?php self::kses_e( __( 'These changed on live <em>and</em> here since the last pull. Your version stays until you choose. <strong>Compare</strong> shows the differences side by side.', 'livepull' ) ); ?></p>
 			<div id="livepull-conflicts"><?php self::conflicts_table( $conflicts ); ?></div>
 			<h3><?php esc_html_e( 'Changed here since the last pull', 'livepull' ); ?></h3>
 			<p class="description"><?php esc_html_e( 'If live changes any of these too, you\'ll get a conflict instead of an overwrite.', 'livepull' ); ?></p>

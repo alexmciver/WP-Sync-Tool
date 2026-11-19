@@ -4,6 +4,7 @@ All notable changes to LivePull. Versions follow [semantic versioning](https://s
 
 ## 1.2.2
 Fixes from the 1.2.1 review.
+- **Conflicts can be decided straight after a check.** "Check for changes" now records the conflicts it finds, so the Conflicts tab (with Compare) shows them before you pull, and the list has a "Compare and decide now" button. "Keep mine" chosen before pulling sticks: the pull leaves your version alone without flagging it again.
 - **WordPress compatibility** shows on the Updates screen instead of "Not tested": the updater passes on "Tested up to", "Requires at least" and "Requires PHP" from the release's readme, as WordPress.org does (tested with 7.1 counts for every 7.1.x). Applies to updates offered to sites on 1.2.2 or later.
 - **Copy everything** is no longer blocked for good by a pull that was abandoned (for example a tab closed mid-pull). It takes over an abandoned lock the way Pull does.
 - **The pull lock** only ever changes the exact lock it checked, so a takeover landing at the same moment is never overwritten or removed.

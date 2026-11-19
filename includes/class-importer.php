@@ -737,6 +737,9 @@ final class LivePull_Importer {
 	}
 
 	private function conflict( $key, $item, $local, $reason ) {
+		if ( LivePull_Puller::is_kept( $key ) ) {
+			return; // "Keep mine" was already chosen: leave it as it is, without asking again.
+		}
 		$this->report['conflicts'][ $key ] = array(
 			'key'      => $key,
 			'label'    => $this->label( $item, $local ),

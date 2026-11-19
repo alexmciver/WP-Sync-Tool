@@ -300,7 +300,7 @@
 			[ 'create', __( 'New on live', 'livepull' ) ],
 			[ 'update', __( 'Changed on live', 'livepull' ) ],
 			[ 'delete', __( 'Deleted on live', 'livepull' ) ],
-			[ 'conflict', __( 'Changed here and on live: your version is kept, and you can decide under Conflicts', 'livepull' ) ]
+			[ 'conflict', __( 'Changed here and on live: your version stays unless you choose the live one', 'livepull' ) ]
 		];
 		var groups = {};
 		items.forEach( function ( i ) { groups[ i.group ] = ( groups[ i.group ] || 0 ) + 1; } );
@@ -335,6 +335,11 @@
 				var ul0 = el( 'ul' );
 				list.forEach( function ( i ) { ul0.appendChild( el( 'li', '', i.label ) ); } );
 				det.appendChild( ul0 );
+				var dec = el( 'button', 'button', __( 'Compare and decide now', 'livepull' ) );
+				dec.type = 'button';
+				dec.addEventListener( 'click', function () { showTab( 'conflicts', true ); } );
+				var pd = el( 'p', 'livepull-decide' ); pd.appendChild( dec );
+				det.appendChild( pd );
 				wrap.appendChild( det );
 				return;
 			}
@@ -478,9 +483,10 @@
 
 		next( params ).then( function ( d ) {
 			renderReport( d );
+			// A check records conflicts too, so the Conflicts tab is up to date either way.
+			$( '#livepull-conflicts' ).innerHTML = d.conflicts_html;
+			setConflictCount( d.conflict_count );
 			if ( ! d.dry ) {
-				$( '#livepull-conflicts' ).innerHTML = d.conflicts_html;
-				setConflictCount( d.conflict_count );
 				if ( d.history_html ) { $( '#livepull-history' ).innerHTML = d.history_html; }
 				if ( d.conflict_count ) {
 					var go2 = el( 'button', 'button', __( 'Sort out the conflicts', 'livepull' ) );

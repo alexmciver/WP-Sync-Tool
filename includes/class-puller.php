@@ -273,9 +273,8 @@ final class LivePull_Puller {
 				$state['downloads'] = array_merge( $state['downloads'], $queued );
 				$state['dl_total'] += count( $queued );
 				$state['activity']  = sprintf( 'Importing batch %d: %d left in this batch', $state['page'], count( $state['pending'] ) );
-				if ( ! $dry ) {
-					self::store_conflicts( $report );
-				}
+				// Checks record conflicts too, so they can be compared and decided before pulling.
+				self::store_conflicts( $report );
 				if ( $out() ) {
 					break;
 				}
@@ -592,6 +591,7 @@ final class LivePull_Puller {
 				update_option( 'livepull_full_synced', gmdate( 'Y-m-d H:i:s' ), false );
 			}
 			LivePull_History::add( 'pull', $state['report'], array( 'source' => $state['opts']['source'], 'backup' => $state['backup_file'] ) );
+			delete_option( self::KEPT ); // That pull went past the changes "Keep mine" was about.
 			self::after_pull( $state['report'] );
 		}
 		self::unlock( $state );
@@ -762,8 +762,23 @@ final class LivePull_Puller {
 		return $rows;
 	}
 
+	const KEPT = 'livepull_kept';
+
+	/**
+	 * "Keep mine". Remembered until the next real pull has gone past that change on live, so
+	 * deciding before pulling (straight after a check) doesn't bring the same conflict back.
+	 */
 	public static function keep( $key ) {
 		self::forget_conflict( $key );
+		$kept         = (array) get_option( self::KEPT, array() );
+		$kept[ $key ] = time();
+		update_option( self::KEPT, $kept, false );
+	}
+
+	/** @return bool true if "Keep mine" was chosen for this item since the last pull. */
+	public static function is_kept( $key ) {
+		$kept = (array) get_option( self::KEPT, array() );
+		return isset( $kept[ $key ] );
 	}
 
 	/** Turn a local ID or sync ID into "type:sync_id". @return string|WP_Error */
