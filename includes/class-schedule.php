@@ -92,6 +92,20 @@ class LivePull_Schedule {
 		if ( ! get_current_user_id() && ! empty( $s['user'] ) && user_can( (int) $s['user'], 'manage_options' ) ) {
 			wp_set_current_user( (int) $s['user'] );
 		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			// Without an administrator, WordPress would filter pulled HTML (page-builder markup
+			// could be stripped), so don't pull at all.
+			$msg              = __( 'Scheduled pulls need to know which administrator they run as. Open Tools → LivePull → Settings and press Save under "Pull automatically".', 'livepull' );
+			$failed_before    = ! empty( $s['failing'] );
+			$s['last_run']    = time();
+			$s['last_result'] = $msg;
+			$s['failing']     = true;
+			update_option( self::OPTION, $s, false );
+			if ( $s['email'] && ! $failed_before ) {
+				self::email( null, new WP_Error( 'livepull_schedule_user', $msg ), $msg );
+			}
+			return new WP_Error( 'livepull_schedule_user', $msg );
+		}
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 600 ); // phpcs:ignore
 		}

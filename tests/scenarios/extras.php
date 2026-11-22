@@ -188,7 +188,10 @@ if ( 'verify_change' === $phase ) {
 	t_eq( is_wp_error( $res ) ? $res->get_error_code() : 'no error', 'livepull_listing_gone', 'an expired uploads list is recognised (so Copy everything lists again)' );
 
 	// Scheduled pulls: a run is recorded; a failure emails once, not every run.
+	$admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( (int) $admins[0] ); // Schedules are saved by an administrator, and run as them.
 	LivePull_Schedule::save( 'hourly', true );
+	wp_set_current_user( 0 ); // Cron runs with no one logged in.
 	$mails = 0;
 	add_filter( 'pre_wp_mail', function () use ( &$mails ) { $mails++; return true; } );
 	$r = LivePull_Schedule::run();
@@ -203,5 +206,11 @@ if ( 'verify_change' === $phase ) {
 	LivePull_Schedule::run();
 	$st = LivePull_Schedule::settings();
 	t_ok( empty( $st['failing'] ), 'a working run clears the failure' );
+	$s2 = get_option( 'livepull_schedule' );
+	$s2['user'] = 0;
+	update_option( 'livepull_schedule', $s2 );
+	wp_set_current_user( 0 );
+	$r = LivePull_Schedule::run();
+	t_ok( is_wp_error( $r ) && 'livepull_schedule_user' === $r->get_error_code(), 'a schedule with no administrator doesn\'t pull (HTML would be filtered)' );
 	LivePull_Schedule::save( 'off', false );
 }

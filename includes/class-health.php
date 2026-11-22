@@ -148,6 +148,9 @@ class LivePull_Health {
 			$add( 'warn', __( 'PHP memory is low', 'livepull' ), sprintf( __( 'memory_limit is %s', 'livepull' ), ini_get( 'memory_limit' ) ), __( 'Big pages and backups may fail. Raise memory_limit to at least 256M.', 'livepull' ) );
 		}
 		$sched = LivePull_Schedule::settings();
+		if ( 'off' !== $sched['every'] && ( empty( $sched['user'] ) || ! user_can( (int) $sched['user'], 'manage_options' ) ) ) {
+			$add( 'warn', __( 'Scheduled pulls don\'t know which administrator to run as', 'livepull' ), '', __( 'Open Tools → LivePull → Settings and press Save under "Pull automatically".', 'livepull' ) );
+		}
 		if ( 'off' !== $sched['every'] && ! LivePull_Schedule::next() ) {
 			$add( 'warn', __( 'Scheduled pulls are on but not scheduled', 'livepull' ), '', __( 'Open Tools → LivePull → Settings and press Save under "Pull automatically".', 'livepull' ) );
 		}
