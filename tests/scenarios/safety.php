@@ -56,9 +56,13 @@ if ( 'verify' === $phase ) {
 	wp_set_current_user( $author_id );
 	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
 	t_ok( false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' ), "pulls by someone without unfiltered-HTML permission keep WordPress's HTML filter on" );
+	$evil = '<p>Hi</p><script>alert(1)</script><a href="javascript:alert(1)" onclick="x()">x</a>';
+	$kept = LivePull_Importer::html( $evil );
+	t_ok( false === stripos( $kept, '<script' ) && false === stripos( $kept, 'javascript:' ) && false === stripos( $kept, 'onclick' ) && false !== strpos( $kept, '<p>Hi</p>' ), 'content written after ID mapping is filtered for users without unfiltered-HTML permission' );
 	wp_set_current_user( $admin_id );
 	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
 	t_ok( false === has_filter( 'content_save_pre', 'wp_filter_post_kses' ), 'an administrator\'s pull saves content as live has it (filter off, as WordPress decides)' );
+	t_eq( LivePull_Importer::html( $evil ), $evil, "an administrator's content written after ID mapping is kept as live has it" );
 	wp_set_current_user( 0 );
 	wp_delete_user( $author_id );
 

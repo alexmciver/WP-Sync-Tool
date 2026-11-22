@@ -2,6 +2,12 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.3.1
+More changes from the WordPress.org review.
+- **The HTML filter also covers the final save.** After a pull maps IDs in content, excerpts and category/tag descriptions, that last write now goes through `wp_kses_post()` too, unless the person pulling may post unfiltered HTML. Before, only the first save was filtered.
+- **Scheduled pulls from before 1.3.0 wait for an administrator.** They skip (with a message on the Health tab) until an administrator opens Settings and presses Save under "Pull automatically", so nothing is ever pulled without a logged-in user.
+- The admin page's script and styles load through `admin_enqueue_scripts`, on the LivePull screen only.
+
 ## 1.3.0
 Changes from the WordPress.org review.
 - **WordPress's HTML filter stays on.** Pulls no longer switch it off: content is saved unfiltered only for users WordPress allows to post unfiltered HTML (administrators on a single site), exactly as if they'd pasted it in. Scheduled pulls run as the administrator who set them up. **If you had scheduled pulls on, open Settings and press Save under "Pull automatically" once**: until then they skip (with a message) rather than pull filtered content. Terminal pulls should use `--user=<admin>` (LivePull warns if they don't).

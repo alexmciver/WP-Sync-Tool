@@ -837,7 +837,7 @@ final class LivePull_Importer {
 					return $cb( $dkind, $rid );
 				} ) ) : $t['description'];
 			} else {
-				$desc = LivePull_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' );
+				$desc = self::html( LivePull_Refs::walk_content( $this->urls( $t['description'] ), $cb, 'term_description' ) );
 			}
 			$wpdb->update( $wpdb->term_taxonomy, array( 'parent' => $parent, 'description' => $desc ), array( 'term_id' => $id, 'taxonomy' => $t['taxonomy'] ) );
 			clean_term_cache( $id, $t['taxonomy'] );
@@ -860,13 +860,14 @@ final class LivePull_Importer {
 			$this->write_meta( 'post', $id, $ck, $values );
 		}
 
-		// Parent, content and excerpt, written directly so no hooks/kses touch them.
+		// Parent, content and excerpt, written once their IDs are mapped. The final HTML goes
+		// through the same kses rule as a normal save (see self::html()).
 		$wpdb->update(
 			$wpdb->posts,
 			array(
 				'post_parent'  => $p['post_parent'] ? (int) $cb( 'post', $p['post_parent'] ) : 0,
-				'post_content' => LivePull_Refs::walk_content( $this->urls( $p['post_content'] ), $cb, 'post_content' ),
-				'post_excerpt' => LivePull_Refs::walk_content( $this->urls( $p['post_excerpt'] ), $cb, 'post_excerpt' ),
+				'post_content' => self::html( LivePull_Refs::walk_content( $this->urls( $p['post_content'] ), $cb, 'post_content' ) ),
+				'post_excerpt' => self::html( LivePull_Refs::walk_content( $this->urls( $p['post_excerpt'] ), $cb, 'post_excerpt' ) ),
 			),
 			array( 'ID' => $id )
 		);
@@ -892,6 +893,19 @@ final class LivePull_Importer {
 		if ( function_exists( 'wc_delete_product_transients' ) && in_array( $p['post_type'], array( 'product', 'product_variation' ), true ) ) {
 			wc_delete_product_transients( $id );
 		}
+	}
+
+	/**
+	 * HTML written straight to the database gets the same rule WordPress applies on a normal
+	 * save: kept as is for users allowed unfiltered HTML, otherwise run through wp_kses_post().
+	 * Values are stored slash-free here, so no wp_slash/wp_unslash round trip is needed.
+	 */
+	public static function html( $html ) {
+		$html = (string) $html;
+		if ( '' === $html || current_user_can( 'unfiltered_html' ) ) {
+			return $html;
+		}
+		return wp_kses_post( $html );
 	}
 
 	/** @internal Closure access for PHP 7.4. */

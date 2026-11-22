@@ -19,6 +19,7 @@ final class LivePull_Admin {
 
 	public static function init() {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ) );
+		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'enqueue' ) );
 		// Finish a "Copy everything" whose last request ended while moving files into place.
 		add_action( 'admin_init', array( __CLASS__, 'resume_copy' ) );
 		add_action( 'admin_post_livepull_save', array( __CLASS__, 'save' ) );
@@ -40,8 +41,17 @@ final class LivePull_Admin {
 	}
 
 	public static function menu() {
-		$hook = add_management_page( 'LivePull', 'LivePull', self::CAP, self::SLUG, array( __CLASS__, 'render' ) );
-		add_action( 'admin_print_styles-' . $hook, array( __CLASS__, 'assets' ) );
+		self::$hook = add_management_page( 'LivePull', 'LivePull', self::CAP, self::SLUG, array( __CLASS__, 'render' ) );
+	}
+
+	/** Screen hook of the LivePull page, set when the menu is added. */
+	private static $hook = '';
+
+	/** admin_enqueue_scripts: load the page's files on the LivePull screen only. */
+	public static function enqueue( $hook_suffix ) {
+		if ( self::$hook && $hook_suffix === self::$hook ) {
+			self::assets();
+		}
 	}
 
 	public static function url( $args = array() ) {

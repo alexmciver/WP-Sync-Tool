@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,11 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.3.1 =
+* The HTML filter also covers content written after IDs are mapped (content, excerpts, term descriptions).
+* Scheduled pulls set up before 1.3.0 skip until an administrator saves the schedule.
+* Admin script and styles load via admin_enqueue_scripts.
+
 = 1.3.0 =
 * WordPress's HTML filter is never switched off: pulled content is filtered unless the person pulling may post unfiltered HTML.
 * Tables are copied and restored as data with prepared queries only.
@@ -144,6 +149,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.3.1 =
+Pulled content is filtered at every save for users without unfiltered HTML. If you use scheduled pulls, press Save under "Pull automatically" once. Update both sites.
 
 = 1.3.0 =
 New backup format and location. Backups made before 1.3.0 are no longer listed; they stay where they were for you to keep or delete. Update both sites.
