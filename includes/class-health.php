@@ -337,7 +337,7 @@ class LivePull_Health {
 	}
 
 	private static function host() {
-		$abspath = wp_normalize_path( ABSPATH );
+		$abspath = LivePull_Config::paths()['uploads'];
 		$checks  = array(
 			'WP Engine'          => defined( 'WPE_APIKEY' ) || getenv( 'IS_WPE' ),
 			'Kinsta'             => defined( 'KINSTAMU_VERSION' ) || getenv( 'KINSTA_CACHE_ZONE' ),

@@ -165,10 +165,9 @@ final class LivePull_Importer {
 		$items = self::sort_items( $items );
 
 		LivePull_Logger::suspend();
-		// Content is copied exactly as live has it; WordPress's HTML filter (kses) would strip
-		// page-builder markup for users without unfiltered_html. Put it back afterwards.
-		$kses_was_on = false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' );
-		kses_remove_filters();
+		// WordPress's HTML filter (kses) stays exactly as WordPress set it for the person running
+		// the pull: content is saved unfiltered only for users allowed to post unfiltered HTML
+		// (administrators on a single site), just as if they had pasted it in themselves.
 		remove_action( 'post_updated', 'wp_save_post_revision', 10 );
 		// Never let a pull trigger outgoing side effects from the local site.
 		remove_action( 'publish_post', '_publish_post_hook', 5 ); // pingbacks/enclosures
@@ -193,9 +192,6 @@ final class LivePull_Importer {
 				}
 			}
 		} finally {
-			if ( $kses_was_on ) {
-				kses_init_filters();
-			}
 			wp_defer_term_counting( false );
 			add_action( 'post_updated', 'wp_save_post_revision', 10, 1 );
 			add_action( 'publish_post', '_publish_post_hook', 5, 1 );

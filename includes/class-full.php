@@ -194,21 +194,19 @@ final class LivePull_Full {
 			if ( is_multisite() && preg_match( '/^\d+_/', $name ) ) {
 				continue;
 			}
-			$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $full ), ARRAY_N );
-			if ( ! $create || false === stripos( $create[1], 'CREATE TABLE' ) ) {
+			$kind = $wpdb->get_row( $wpdb->prepare( 'SHOW FULL TABLES WHERE %i = %s', 'Tables_in_' . DB_NAME, $full ), ARRAY_N );
+			if ( $kind && isset( $kind[1] ) && 'BASE TABLE' !== $kind[1] ) {
 				continue; // Views etc.
 			}
-			$keys = $wpdb->get_results( $wpdb->prepare( "SHOW KEYS FROM %i WHERE Key_name = 'PRIMARY'", $full ) );
-			$pk   = array();
-			foreach ( $keys as $k ) {
-				$pk[ (int) $k->Seq_in_index ] = $k->Column_name;
+			$schema = LivePull_Schema::describe( $full );
+			if ( is_wp_error( $schema ) ) {
+				continue;
 			}
-			ksort( $pk );
 			$out[] = array(
 				'name'   => $name,
-				'create' => $create[1],
+				'schema' => $schema,
 				'rows'   => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $full ) ),
-				'pk'     => array_values( $pk ),
+				'pk'     => LivePull_Schema::primary_key( $schema ),
 			);
 		}
 		return array( 'prefix' => $wpdb->prefix, 'tables' => $out );
@@ -289,9 +287,10 @@ final class LivePull_Full {
 		// Each copy has its own listing (named by the token it sends), so two copies at once
 		// never share one, and a listing is never rebuilt part-way (that could change its order).
 		$token = preg_replace( '/[^A-Za-z0-9]/', '', (string) $r['token'] );
-		$index = trailingslashit( get_temp_dir() ) . 'livepull-files-' . md5( $base . '|' . LivePull_Config::secret() . '|' . $token ) . '.txt';
+		$lists = LivePull_Config::work_dir( 'lists' );
+		$index = $lists . '/files-' . md5( $base . '|' . LivePull_Config::secret() . '|' . $token ) . '.php';
 		if ( 0 === $offset ) {
-			foreach ( (array) glob( trailingslashit( get_temp_dir() ) . 'livepull-files-*' ) as $old ) {
+			foreach ( (array) glob( $lists . '/files-*' ) as $old ) {
 				if ( filemtime( $old ) < time() - DAY_IN_SECONDS ) {
 					wp_delete_file( $old ); // Listings from copies that never finished.
 				}
@@ -305,7 +304,8 @@ final class LivePull_Full {
 		}
 		// Plain line-by-line reading (SplFileObject::seek() returns the wrong line before PHP 8.0.1).
 		$fh    = fopen( $index, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-		$total = (int) trim( (string) fgets( $fh ) ); // First line: how many files.
+		fgets( $fh ); // The guard line.
+		$total = (int) trim( (string) fgets( $fh ) ); // Then: how many files.
 		for ( $i = 0; $i < $offset && false !== fgets( $fh ); $i++ ) {
 			// Skip to this page.
 		}
@@ -337,11 +337,12 @@ final class LivePull_Full {
 	/** Write every uploads file path (one per line, count first) to $index. @return int|WP_Error */
 	private static function write_file_index( $base, $index ) {
 		$skip = self::skipped_dirs();
-		$tmp  = $index . '.part';
+		$tmp  = $index . '.part.php';
 		$out  = fopen( $tmp, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
 		if ( ! $out ) {
 			return new WP_Error( 'livepull_files', 'Could not write a temporary file listing on live.', array( 'status' => 500 ) );
 		}
+		fwrite( $out, LivePull_Backup::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
 		$count = 0;
 		$it    = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $base, FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $it as $file ) {
@@ -349,6 +350,9 @@ final class LivePull_Full {
 				continue;
 			}
 			$rel = ltrim( substr( wp_normalize_path( $file->getPathname() ), strlen( $base ) ), '/' );
+			if ( LivePull_Config::is_work_path( $rel ) ) {
+				continue; // LivePull's own folder (backups, lists, staging) never travels.
+			}
 			foreach ( $skip as $d ) {
 				if ( 0 === strpos( $rel, $d . '/' ) ) {
 					continue 2;
@@ -364,7 +368,8 @@ final class LivePull_Full {
 		// Count goes first: write it, then the list.
 		$final = fopen( $index, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
 		$in    = fopen( $tmp, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-		fwrite( $final, $count . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+		fwrite( $final, LivePull_Backup::GUARD . $count . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+		fgets( $in ); // Skip the part file's own guard line.
 		stream_copy_to_stream( $in, $final );
 		fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 		fclose( $final ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
@@ -409,7 +414,7 @@ final class LivePull_Full {
 
 		// Settings that belong to THIS site and must survive the copy.
 		$keep = array();
-		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style', 'livepull_history', 'livepull_schedule', 'livepull_groups', 'livepull_role' ) as $o ) {
+		foreach ( array( 'siteurl', 'home', 'blog_public', 'livepull_remote', 'livepull_remote_secret', 'livepull_secret', 'livepull_remote_url_style', 'livepull_history', 'livepull_schedule', 'livepull_groups', 'livepull_role', 'livepull_backup_suffix' ) as $o ) {
 			$v = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $o ) );
 			if ( null !== $v ) {
 				$keep[ $o ] = $v;
@@ -466,8 +471,14 @@ final class LivePull_Full {
 				$pairs[ $scheme . $host ] = '//' === $scheme ? preg_replace( '#^https?:#', '', $local ) : $local;
 			}
 		}
-		if ( ! empty( $remote['abspath'] ) && untrailingslashit( $remote['abspath'] ) !== untrailingslashit( ABSPATH ) ) {
-			$pairs[ untrailingslashit( $remote['abspath'] ) ] = untrailingslashit( ABSPATH );
+		// Server paths stored in settings (cache folders, upload paths): live's → this site's.
+		$here = LivePull_Config::paths();
+		if ( ! empty( $remote['paths'] ) && is_array( $remote['paths'] ) ) {
+			foreach ( $here as $k => $local ) {
+				if ( ! empty( $remote['paths'][ $k ] ) && is_string( $remote['paths'][ $k ] ) && untrailingslashit( $remote['paths'][ $k ] ) !== untrailingslashit( $local ) ) {
+					$pairs[ untrailingslashit( $remote['paths'][ $k ] ) ] = untrailingslashit( $local );
+				}
+			}
 		}
 		$out = array();
 		foreach ( $pairs as $f => $t ) {
@@ -654,19 +665,13 @@ final class LivePull_Full {
 	 * the same deny rules as the backups folder.
 	 */
 	private static function stage_dir() {
-		$uploads = wp_get_upload_dir();
-		$dir     = wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-' . wp_generate_password( 24, false );
-		if ( wp_mkdir_p( $dir ) ) {
-			LivePull_Backup::protect( $dir );
-		}
-		return $dir;
+		return LivePull_Config::work_dir( 'stage-' . strtolower( wp_generate_password( 24, false ) ) );
 	}
 
 	/** Delete abandoned staging folders (never the one still being moved into place). */
 	private static function remove_stages() {
-		$uploads = wp_get_upload_dir();
-		$keep    = self::placing();
-		foreach ( (array) glob( wp_normalize_path( dirname( $uploads['basedir'] ) ) . '/livepull-stage-*', GLOB_ONLYDIR ) as $dir ) {
+		$keep = self::placing();
+		foreach ( (array) glob( LivePull_Config::work_dir() . '/stage-*', GLOB_ONLYDIR ) as $dir ) {
 			if ( wp_normalize_path( $dir ) !== $keep ) {
 				LivePull_Config::fs()->delete( $dir, true );
 			}
@@ -720,7 +725,7 @@ final class LivePull_Full {
 		}
 		if ( $failed ) {
 			// Keep what couldn't be moved, under a name the clean-up never deletes, and say where.
-			$kept = str_replace( '/livepull-stage-', '/livepull-unplaced-', $stage );
+			$kept = dirname( $stage ) . '/unplaced-' . substr( basename( $stage ), 6 );
 			$fs->move( $stage, $kept, false );
 			$state['errors'][] = sprintf( '%d file(s) could not be moved into the uploads folder. They are kept in %s: copy them into uploads by hand.', $failed, $kept );
 		} else {
@@ -728,35 +733,6 @@ final class LivePull_Full {
 		}
 		delete_option( self::PLACING );
 		return true;
-	}
-
-	/**
-	 * Live's CREATE TABLE statement is run here (only its name swapped), so check it is just a
-	 * table definition: one statement, our temporary name, an ordinary storage engine, and no
-	 * options that write files elsewhere, connect to other servers or copy other tables.
-	 *
-	 * @return string Reason it was refused, or '' if it's fine.
-	 */
-	private static function unsafe_create( $sql, $tmp ) {
-		if ( 0 !== strpos( $sql, 'CREATE TABLE `' . $tmp . '` (' ) ) {
-			return 'not a plain CREATE TABLE';
-		}
-		// Look only at the SQL itself: blank out quoted text (defaults, comments) and `names`.
-		$bare = preg_replace( array( "/'(?:[^'\\\\]|\\\\.|'')*'/s", '/"(?:[^"\\\\]|\\\\.)*"/s', '/`[^`]*`/' ), array( "''", '""', '``' ), $sql );
-		if ( false !== strpos( $bare, ';' ) ) {
-			return 'more than one statement';
-		}
-		if ( preg_match( '/\b(DATA|INDEX)\s+DIRECTORY\b|\bCONNECTION\s*=|\bUNION\s*=|\bSELECT\b/i', $bare ) ) {
-			return 'options that reach outside the table';
-		}
-		if ( preg_match_all( '/\bENGINE\s*=\s*([A-Za-z]+)/i', $bare, $m ) ) {
-			foreach ( $m[1] as $engine ) {
-				if ( ! in_array( strtolower( $engine ), array( 'innodb', 'myisam', 'aria', 'memory', 'heap' ), true ) ) {
-					return 'storage engine ' . $engine;
-				}
-			}
-		}
-		return '';
 	}
 
 	private static function tmp_name( $name ) {
@@ -786,21 +762,12 @@ final class LivePull_Full {
 		}
 
 		if ( ! $state['created'] ) {
-			$sql = preg_replace( '/^CREATE TABLE `[^`]+`/i', 'CREATE TABLE `' . $tmp . '`', $t['create'], 1 );
-			$sql = preg_replace( '/\sAUTO_INCREMENT=\d+/i', '', $sql );
-			$why = self::unsafe_create( $sql, $tmp );
-			if ( $why ) {
-				return new WP_Error( 'livepull_create', sprintf( 'Live sent an unexpected definition for table %s (%s), so nothing was changed.', $t['name'], $why ) );
+			if ( empty( $t['schema'] ) || ! is_array( $t['schema'] ) ) {
+				return new WP_Error( 'livepull_create', 'Live\'s copy of LivePull is too old for Copy everything. Update LivePull on live, then try again. Nothing here was changed.' );
 			}
-			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $tmp ) );
-			// $sql is live's own CREATE TABLE statement (from SHOW CREATE TABLE) with the name swapped for our temporary table.
-			if ( false === $wpdb->query( $sql ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-				// e.g. MySQL 8 collations on MariaDB: fall back to a universally available one.
-				$sql2 = preg_replace( '/utf8mb4_0900_[a-z_]+/i', 'utf8mb4_unicode_ci', $sql );
-				$sql2 = preg_replace( '/utf8mb4_uca1400_[a-z_]+/i', 'utf8mb4_unicode_ci', $sql2 );
-				if ( false === $wpdb->query( $sql2 ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
-					return new WP_Error( 'livepull_create', 'Could not create a copy of table ' . $t['name'] . ': ' . $wpdb->last_error );
-				}
+			$made = LivePull_Schema::create( $tmp, $t['schema'] );
+			if ( is_wp_error( $made ) ) {
+				return new WP_Error( 'livepull_create', sprintf( 'Could not make a copy of table %s (%s), so nothing was changed.', $t['name'], $made->get_error_message() ) );
 			}
 			$state['created'] = true;
 		}
@@ -838,25 +805,16 @@ final class LivePull_Full {
 	private static function insert_rows( $tmp, $name, array $rows, array $state ) {
 		global $wpdb;
 		list( $from, $to ) = $state['pairs'];
-		$lp  = $wpdb->prefix;
-		$rp  = $state['rprefix'];
+		$lp         = $wpdb->prefix;
+		$rp         = $state['rprefix'];
 		$fix_prefix = ( $lp !== $rp );
-		$esc = function ( $v ) use ( $wpdb ) {
-			if ( null === $v ) {
-				return 'NULL';
-			}
-			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string -- multi-row INSERT of copied rows; every value is escaped here.
-		};
-		$cols   = array_keys( $rows[0] );
-		$head   = 'INSERT INTO `' . $tmp . '` (`' . implode( '`,`', $cols ) . '`) VALUES ';
-		$values = array();
-		$size   = 0;
+		$cols       = array_keys( $rows[0] );
+		$out        = array();
 		foreach ( $rows as $row ) {
 			$vals = array();
 			foreach ( $row as $col => $v ) {
-				if ( is_array( $v ) && isset( $v['b64'] ) ) {
-					$v = base64_decode( $v['b64'] ); // phpcs:ignore
-				} elseif ( is_string( $v ) ) {
+				$v = LivePull_Schema::unpack( $v );
+				if ( is_string( $v ) ) {
 					$v = LivePull_Serial::replace( $v, $from, $to );
 				}
 				// Table prefix lives inside some keys: wp_user_roles, wp_capabilities, wp_user_level…
@@ -864,23 +822,12 @@ final class LivePull_Full {
 					( ( 'options' === $name && 'option_name' === $col ) || ( 'usermeta' === $name && 'meta_key' === $col ) ) ) {
 					$v = $lp . substr( $v, strlen( $rp ) );
 				}
-				$vals[] = $esc( $v );
+				$vals[] = $v;
 			}
-			$line     = '(' . implode( ',', $vals ) . ')';
-			$values[] = $line;
-			$size    += strlen( $line );
-			if ( $size > 900000 ) {
-				if ( false === $wpdb->query( $head . implode( ',', $values ) ) ) { // phpcs:ignore
-					return new WP_Error( 'livepull_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
-				}
-				$values = array();
-				$size   = 0;
-			}
+			$out[] = $vals;
 		}
-		if ( $values && false === $wpdb->query( $head . implode( ',', $values ) ) ) { // phpcs:ignore
-			return new WP_Error( 'livepull_insert', 'Writing ' . $name . ' failed: ' . $wpdb->last_error );
-		}
-		return true;
+		$ok = LivePull_Schema::insert( $tmp, $cols, $out );
+		return is_wp_error( $ok ) ? new WP_Error( 'livepull_insert', 'Writing ' . $name . ' failed: ' . $ok->get_error_message() ) : true;
 	}
 
 	private static function files_chunk( array $state, callable $out ) {
@@ -949,6 +896,7 @@ final class LivePull_Full {
 	private static function swap( array &$state ) {
 		global $wpdb;
 		$renames = array();
+		$moves   = array();
 		$drops   = array();
 		foreach ( $state['tables'] as $t ) {
 			$tmp  = self::tmp_name( $t['name'] );
@@ -958,14 +906,15 @@ final class LivePull_Full {
 				continue;
 			}
 			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $live ) ) ) === $live ) {
-				$renames[] = "`{$live}` TO `{$old}`";
-				$drops[]   = $old;
+				$renames[ $live ] = $old;
+				$drops[]          = $old;
 			}
-			$renames[] = "`{$tmp}` TO `{$live}`";
+			$moves[ $tmp ] = $live;
 		}
-		if ( ! $renames ) {
+		if ( ! $moves ) {
 			return new WP_Error( 'livepull_swap', 'Nothing was copied.' );
 		}
+		$renames = array_merge( $renames, $moves ); // Current tables out of the way first.
 		if ( self::cancelled() ) {
 			return new WP_Error( 'livepull_cancelled', 'Cancelled. Nothing on this site was changed.' );
 		}
@@ -978,8 +927,9 @@ final class LivePull_Full {
 			$wpdb->insert( $tmp_options, array( 'option_name' => self::PLACING, 'option_value' => $state['stage'], 'autoload' => 'no' ) );
 		}
 		// One statement, so every table switches at the same instant.
-		if ( false === $wpdb->query( 'RENAME TABLE ' . implode( ', ', $renames ) ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table names built above from this site's own table list, each backtick-quoted.
-			return new WP_Error( 'livepull_swap', 'Switching tables failed: ' . $wpdb->last_error . ' This site was left as it was.' );
+		$switched = LivePull_Schema::rename( $renames );
+		if ( is_wp_error( $switched ) ) {
+			return new WP_Error( 'livepull_swap', 'Switching tables failed: ' . $switched->get_error_message() . ' This site was left as it was.' );
 		}
 		foreach ( $drops as $d ) {
 			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $d ) );
@@ -993,11 +943,14 @@ final class LivePull_Full {
 		if ( ! isset( $state['keep']['livepull_secret'] ) ) {
 			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", 'livepull_secret' ) ); // Don't keep live's key here.
 		}
-		$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\\_transient\\_%' OR option_name LIKE '\\_site\\_transient\\_%'" );
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE option_name LIKE %s OR option_name LIKE %s', $wpdb->options, $wpdb->esc_like( '_transient_' ) . '%', $wpdb->esc_like( '_site_transient_' ) . '%' ) );
 
 		// Keep LivePull switched on if it's a normal plugin here.
-		if ( defined( 'WP_PLUGIN_DIR' ) && 0 === strpos( wp_normalize_path( LIVEPULL_FILE ), wp_normalize_path( WP_PLUGIN_DIR ) ) ) {
-			$active = maybe_unserialize( $wpdb->get_var( "SELECT option_value FROM {$wpdb->options} WHERE option_name = 'active_plugins'" ) );
+		if ( ! function_exists( 'get_plugins' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+		if ( array_key_exists( plugin_basename( LIVEPULL_FILE ), get_plugins() ) ) {
+			$active = maybe_unserialize( $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s', $wpdb->options, 'active_plugins' ) ) );
 			$active = is_array( $active ) ? $active : array();
 			$base   = plugin_basename( LIVEPULL_FILE );
 			if ( ! in_array( $base, $active, true ) ) {
@@ -1011,7 +964,7 @@ final class LivePull_Full {
 		// Live may run a different WordPress version: bring the copied database in line with
 		// this site's WordPress (exactly what "Update WordPress Database" would do).
 		global $wp_db_version;
-		$copied_db = (int) $wpdb->get_var( "SELECT option_value FROM {$wpdb->options} WHERE option_name = 'db_version'" );
+		$copied_db = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s', $wpdb->options, 'db_version' ) );
 		if ( $copied_db && (int) $wp_db_version !== $copied_db ) {
 			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 			wp_upgrade();

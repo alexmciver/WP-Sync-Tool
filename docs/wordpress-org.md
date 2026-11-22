@@ -22,9 +22,9 @@ A volunteer reviewer reads the code and emails you. The queue has been long in 2
 
 - Reply to their email (don't submit again). Send me the email and I'll make the changes.
 - Points a reviewer might raise, and the answers:
-  - *Direct database queries:* LivePull's whole job is copying content between databases. Every query uses `$wpdb` with placeholders. The few that can't (copying table structures, restoring a backup file) are commented with the reason.
+  - *Direct database queries:* LivePull's whole job is copying content between databases. Every query goes through `$wpdb->prepare()`, including table structures (rebuilt from data by `LivePull_Schema`) and backup restores.
   - *Connecting to another site:* it only connects to the live site that the user connects it to, using a key the user copies across. No third-party services.
-  - *Files written outside `wp-content`:* backups go one folder above the website, when possible, so they can never be downloaded over the web. `LIVEPULL_BACKUP_DIR` lets users choose.
+  - *Files:* everything LivePull writes is in one protected folder in uploads (`livepull-<random>`). `LIVEPULL_BACKUP_DIR` lets users choose another place for backups.
 
 ## 4. After approval (10 minutes, once)
 

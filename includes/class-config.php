@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.2.4';
+	const VERSION  = '1.3.0';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */
@@ -59,6 +59,48 @@ final class LivePull_Config {
 	public static function key_hint( $key ) {
 		$key = (string) $key;
 		return strlen( $key ) >= 8 ? '…' . substr( $key, -4 ) : '(none)';
+	}
+
+	/**
+	 * LivePull's own folder in uploads (backups, Copy everything's staging, live's temporary
+	 * file lists): uploads/livepull-<random>/<sub>. The random part is made once per site, so
+	 * the folder can't be guessed; every folder in it carries deny rules for Apache, LiteSpeed
+	 * and IIS. Files that must stay private are also guarded (see LivePull_Backup::GUARD).
+	 */
+	public static function work_dir( $sub = '' ) {
+		$suffix = get_option( 'livepull_backup_suffix' );
+		if ( ! $suffix || ! preg_match( '/^[a-z0-9]{24}$/', $suffix ) ) {
+			$suffix = strtolower( wp_generate_password( 24, false ) );
+			update_option( 'livepull_backup_suffix', $suffix, false );
+		}
+		$uploads = wp_get_upload_dir();
+		$dir     = wp_normalize_path( untrailingslashit( $uploads['basedir'] ) ) . '/livepull-' . $suffix;
+		$dirs    = array( $dir );
+		if ( '' !== (string) $sub ) {
+			$dir   .= '/' . $sub;
+			$dirs[] = $dir;
+		}
+		foreach ( $dirs as $d ) {
+			if ( ! is_dir( $d ) ) {
+				wp_mkdir_p( $d );
+			}
+			LivePull_Backup::protect( $d );
+		}
+		return $dir;
+	}
+
+	/** Server folders that settings sometimes store (swapped for this site's in a full copy). */
+	public static function paths() {
+		$uploads = wp_get_upload_dir();
+		return array(
+			'uploads' => wp_normalize_path( untrailingslashit( $uploads['basedir'] ) ),
+			'content' => wp_normalize_path( dirname( get_theme_root() ) ),
+		);
+	}
+
+	/** Is this uploads-relative path inside LivePull's own work folder? */
+	public static function is_work_path( $rel ) {
+		return (bool) preg_match( '#^livepull-[a-z0-9]{24}(/|$)#', ltrim( wp_normalize_path( (string) $rel ), '/' ) );
 	}
 
 	/**

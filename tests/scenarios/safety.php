@@ -48,11 +48,19 @@ if ( 'verify' === $phase ) {
 	t_ok( ! term_exists( 'spoofed', 'wp_theme' ), "spoofed live can't create terms in excluded taxonomies" );
 	t_ok( ! username_exists( 'evil' ), 'unknown kinds of item are ignored' );
 	t_ok( count( $report['skipped'] ) >= 9, 'refused items are reported (' . count( $report['skipped'] ) . ' skipped)' );
-	// WordPress's HTML filter (kses) is off in the terminal; switch it on as for an editor, pull, check it's back.
-	kses_init_filters();
+	// WordPress's HTML filter (kses) is never switched off by a pull: it stays as WordPress set it
+	// for the person running the pull.
+	$admins    = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	$admin_id  = (int) $admins[0];
+	$author_id = wp_insert_user( array( 'user_login' => 'lp_author', 'user_pass' => wp_generate_password(), 'role' => 'author' ) );
+	wp_set_current_user( $author_id );
 	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
-	t_ok( false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' ), "WordPress's HTML filter is switched back on after a pull" );
-	kses_remove_filters();
+	t_ok( false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' ), "pulls by someone without unfiltered-HTML permission keep WordPress's HTML filter on" );
+	wp_set_current_user( $admin_id );
+	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
+	t_ok( false === has_filter( 'content_save_pre', 'wp_filter_post_kses' ), 'an administrator\'s pull saves content as live has it (filter off, as WordPress decides)' );
+	wp_set_current_user( 0 );
+	wp_delete_user( $author_id );
 
 	// --- URL rewriting stops at the end of the address.
 	$f = array( 'https://site.co' );
@@ -71,13 +79,24 @@ if ( 'verify' === $phase ) {
 	list( $_SERVER['REQUEST_URI'], $_GET ) = $saved;
 	t_ok( ! $a && $b, 'the key only opens LivePull\'s own routes, not others with LivePull in the query string' );
 
-	// --- Live's table definitions are checked before they run.
-	$uc = new ReflectionMethod( 'LivePull_Full', 'unsafe_create' );
-	$uc->setAccessible( true );
-	$tn = $wpdb->prefix . 'lpulltmp_x';
-	t_ok( '' === $uc->invoke( null, "CREATE TABLE `$tn` (`a` varchar(9) DEFAULT 'select;' COMMENT 'Select it') ENGINE=InnoDB", $tn )
-		&& '' !== $uc->invoke( null, "CREATE TABLE `$tn` (`a` int) ENGINE=FEDERATED CONNECTION='mysql://x'", $tn )
-		&& '' !== $uc->invoke( null, "CREATE TABLE `$tn` (`a` int) DATA DIRECTORY='/tmp'", $tn ), 'unsafe table definitions from live are refused' );
+	// --- Tables from live (or a backup) are rebuilt from data: nothing in it can run as SQL.
+	$tn    = $wpdb->prefix . 'lpulltmp_x';
+	$base  = array( 'engine' => 'InnoDB', 'keys' => array() );
+	$col   = function ( $type, $extra = array() ) {
+		return array_merge( array( 'name' => 'a', 'type' => $type, 'collation' => '', 'null' => true, 'default' => null, 'extra' => '' ), $extra );
+	};
+	$fine  = LivePull_Schema::create( $tn, $base + array( 'columns' => array( $col( 'varchar(40)', array( 'default' => "select'; DROP TABLE x; --" ) ) ) ) );
+	$kept  = $wpdb->get_var( $wpdb->prepare( 'SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $tn ) );
+	$evil1 = LivePull_Schema::create( $tn, $base + array( 'columns' => array( $col( 'int) ENGINE=FEDERATED CONNECTION=\'mysql://x\' -- ' ) ) ) );
+	$evil2 = LivePull_Schema::create( $tn, $base + array( 'columns' => array( $col( 'int' ) ), 'engine' => "InnoDB DATA DIRECTORY='/tmp'" ) );
+	$eng   = $wpdb->get_var( $wpdb->prepare( 'SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $tn ) );
+	$evil3 = LivePull_Schema::create( $tn, $base + array( 'columns' => array( $col( 'int', array( 'name' => 'a` int, b int) --x' ) ) ) ) );
+	$cols3 = $wpdb->get_col( $wpdb->prepare( 'SHOW COLUMNS FROM %i', $tn ) );
+	$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $tn ) );
+	t_ok( true === $fine && false !== strpos( (string) $kept, 'DROP TABLE' ), 'a quote-laden default is stored as plain text, never run' );
+	t_ok( is_wp_error( $evil1 ), 'a column type with SQL in it is refused' );
+	t_ok( true === $evil2 && 'InnoDB' === $eng, 'an unknown storage engine (or options after it) falls back to InnoDB' );
+	t_ok( true === $evil3 && array( 'a` int, b int) --x' ) === $cols3, 'a column name with SQL in it is just an odd name' );
 
 	// --- Redirects: the key never leaves the live site, downloads can't be bounced inward.
 	$seen = array();

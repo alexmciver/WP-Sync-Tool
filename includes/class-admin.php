@@ -41,7 +41,6 @@ final class LivePull_Admin {
 
 	public static function menu() {
 		$hook = add_management_page( 'LivePull', 'LivePull', self::CAP, self::SLUG, array( __CLASS__, 'render' ) );
-		add_action( 'admin_print_scripts-' . $hook, array( __CLASS__, 'noscript_note' ) );
 		add_action( 'admin_print_styles-' . $hook, array( __CLASS__, 'assets' ) );
 	}
 
@@ -55,6 +54,7 @@ final class LivePull_Admin {
 		wp_enqueue_style( 'livepull-admin', $base . 'admin.css', array(), LivePull_Config::VERSION );
 		wp_enqueue_script( 'livepull-admin', $base . 'admin.js', array( 'wp-i18n' ), LivePull_Config::VERSION, true );
 		wp_set_script_translations( 'livepull-admin', 'livepull' );
+		wp_add_inline_script( 'livepull-admin', self::noscript_note(), 'before' );
 		wp_localize_script( 'livepull-admin', 'LIVEPULL', array(
 			'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
 			'nonce'      => wp_create_nonce( 'livepull' ),
@@ -62,9 +62,9 @@ final class LivePull_Admin {
 		) );
 	}
 
-	/** If the script fails to load, say so instead of spinning forever. */
-	public static function noscript_note() {
-		echo '<script>window.addEventListener("load",function(){if(!window.LIVEPULL_LOADED){var s=document.getElementById("livepull-status");if(s&&s.classList.contains("is-loading")){s.className="livepull-status is-error";s.textContent="The LivePull script did not load (check the plugin files are complete, and that no optimisation plugin is blocking assets/admin.js).";}}});</script>';
+	/** If the script fails to load, say so instead of spinning forever (printed before it, so it runs either way). */
+	private static function noscript_note() {
+		return 'window.addEventListener("load",function(){if(!window.LIVEPULL_LOADED){var s=document.getElementById("livepull-status");if(s&&s.classList.contains("is-loading")){s.className="livepull-statusline is-error";var t=s.querySelector(".livepull-status-text")||s;t.textContent=' . wp_json_encode( __( 'The LivePull script did not load (check the plugin files are complete, and that no optimisation plugin is blocking assets/admin.js).', 'livepull' ) ) . ';}}});';
 	}
 
 	/* ================================================================ Save */
@@ -541,9 +541,9 @@ final class LivePull_Admin {
 		<?php endif; ?>
 		<details class="livepull-advanced">
 			<summary><?php esc_html_e( 'Where backups are kept', 'livepull' ); ?></summary>
-			<p class="description"><?php self::kses_e( sprintf( /* translators: 1: backups folder, 2: latest backup note (may be empty) */ __( 'In <code>%1$s</code>%2$s. You can also restore one with <code>wp db import</code> or phpMyAdmin (for a file ending in <code>.sql.php</code>, delete its first line, <code>&lt;?php exit; ?&gt;</code>, first).', 'livepull' ), esc_html( LivePull_Backup::dir() ), $latest ? ' (' . sprintf( /* translators: %s: file name */ __( 'latest: <code>%s</code>', 'livepull' ), esc_html( basename( $latest ) ) ) . ')' : '' ) ); ?></p>
+			<p class="description"><?php self::kses_e( sprintf( /* translators: 1: backups folder, 2: latest backup note (may be empty) */ __( 'In <code>%1$s</code>%2$s. You can also restore one from the terminal with <code>wp livepull restore</code>.', 'livepull' ), esc_html( LivePull_Backup::dir() ), $latest ? ' (' . sprintf( /* translators: %s: file name */ __( 'latest: <code>%s</code>', 'livepull' ), esc_html( basename( $latest ) ) ) . ')' : '' ) ); ?></p>
 			<?php if ( LivePull_Backup::in_web_root() ) : ?>
-				<p class="description"><?php self::kses_e( __( '<strong>Backups are inside the website\'s own folder</strong> because the folder above it can\'t be written to. They can\'t be downloaded over the web and have unguessable names. To keep them completely outside the website, add <code>define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/outside/the/website\' );</code> to wp-config.php.', 'livepull' ) ); ?></p>
+				<p class="description"><?php self::kses_e( __( 'Backups are kept in a protected LivePull folder in uploads: it has an unguessable name and deny rules, and each backup file stops if it is ever requested over the web, so it can\'t be downloaded. To keep them somewhere else, add <code>define( \'LIVEPULL_BACKUP_DIR\', \'/a/folder/of/your/choice\' );</code> to wp-config.php.', 'livepull' ) ); ?></p>
 			<?php endif; ?>
 		</details>
 		<?php
@@ -1131,26 +1131,30 @@ final class LivePull_Admin {
 		check_ajax_referer( 'livepull' );
 		self::guard();
 		$rows = LivePull_Puller::local_changes();
-		ob_start();
 		if ( ! $rows ) {
-			echo '<p class="livepull-empty">Nothing changed here since the last pull.</p>';
+			$html = '<p class="livepull-empty">' . esc_html__( 'Nothing changed here since the last pull.', 'livepull' ) . '</p>';
 		} else {
-			echo '<table class="widefat striped livepull-table"><thead><tr><th>Item</th><th>Change</th></tr></thead><tbody>';
+			$html = '<table class="widefat striped livepull-table"><thead><tr><th>' . esc_html__( 'Item', 'livepull' ) . '</th><th>' . esc_html__( 'Change', 'livepull' ) . '</th></tr></thead><tbody>';
 			foreach ( $rows as $row ) {
-				printf(
+				$html .= sprintf(
 					'<tr><td>%s</td><td>%s</td></tr>',
 					$row['edit'] ? '<a href="' . esc_url( $row['edit'] ) . '">' . esc_html( $row['item'] ) . '</a>' : esc_html( $row['item'] ),
 					esc_html( $row['action'] )
 				);
 			}
-			echo '</tbody></table>';
+			$html .= '</tbody></table>';
 		}
-		wp_send_json_success( array( 'html' => ob_get_clean(), 'count' => count( $rows ) ) );
+		wp_send_json_success( array( 'html' => $html, 'count' => count( $rows ) ) );
 	}
 
+	/** HTML from one of the screen's own render functions (for AJAX replies). */
 	private static function capture( $cb, $arg ) {
 		ob_start();
-		call_user_func( $cb, $arg );
-		return ob_get_clean();
+		try {
+			call_user_func( $cb, $arg );
+		} finally {
+			$html = (string) ob_get_clean(); // Always closed, even if rendering fails.
+		}
+		return $html;
 	}
 }

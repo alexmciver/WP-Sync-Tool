@@ -128,7 +128,7 @@ wp livepull key                        # (on live) show the connection code
 - The key only allows **reading** from live. It's compared in constant time and must be 32+ characters. Treat the connection code like a password.
 - Use `https://` for the live site; LivePull warns if the key would travel over plain HTTP to a public host.
 - *Copy everything* is opt-in and can be time-limited; logged-in sessions are never copied.
-- Backups are kept outside the public web folder when the server allows (one folder per site), otherwise in `wp-content/livepull-backups` with deny rules and unguessable file names.
+- Backups are kept in a protected LivePull folder in uploads: an unguessable folder name, deny rules for Apache, LiteSpeed and IIS, and backup files that stop if requested over the web (so they can't be downloaded on nginx either). They hold the tables as data and are restored with prepared queries only.
 - Files from live are only written inside uploads and never as executable or server-config files (`.php`, `.phar`, `.htaccess`, `.user.ini`…). Media is only downloaded from the live site or public addresses – never private, internal or cloud-metadata addresses.
 - Updates are only installed from this GitHub repository over HTTPS, and only if the download matches its published checksum **and** carries a valid signature from the release workflow (Ed25519; the private key is a repository secret, the public key is in the plugin).
 - Deleting the plugin removes its settings, log, ID tags and backups.

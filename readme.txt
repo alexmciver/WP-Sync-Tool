@@ -1,10 +1,10 @@
 === LivePull ===
-Contributors: alexmciver
+Contributors: physion1
 Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.4
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,11 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.3.0 =
+* WordPress's HTML filter is never switched off: pulled content is filtered unless the person pulling may post unfiltered HTML.
+* Tables are copied and restored as data with prepared queries only.
+* Backups use a new format and live in a protected folder in uploads.
+
 = 1.2.4 =
 * Conflicts found by "Check for changes" can be compared and decided straight away, before pulling.
 * "Keep mine" chosen before a pull sticks.
@@ -139,6 +144,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.3.0 =
+New backup format and location. Backups made before 1.3.0 are no longer listed; they stay where they were for you to keep or delete. Update both sites.
 
 = 1.2.4 =
 Compare and decide conflicts as soon as "Check for changes" finds them. Update both your live and local sites.

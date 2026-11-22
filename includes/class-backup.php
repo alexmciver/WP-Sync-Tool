@@ -9,68 +9,43 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Database backup before a pull.
  *
- * In the terminal it uses `wp db export` (full database). From WP admin it writes a
- * gzipped SQL dump of the tables a pull can change, in PHP, so it works on any host.
- * Restore with `wp db import <file>` or phpMyAdmin.
+ * Each backup holds the tables a pull can change (or every table, before Copy everything) as
+ * data: each table's structure (see LivePull_Schema) followed by its rows, one JSON line at a
+ * time. Restoring rebuilds the tables from that data with prepared queries only.
  */
 final class LivePull_Backup {
 
 	const KEEP      = 10;
 	const KEEP_COPY = 3;
 
+	/** Format marker on the first data line. */
+	const FORMAT = 'livepull-backup-1';
+
 	/**
-	 * Where backups live. Outside the public web folder when possible (e.g. the folder above
-	 * public_html / app/public), so they can never be downloaded even on servers that ignore
-	 * .htaccess (nginx). Otherwise wp-content/livepull-backups-<random>: deny rules for
-	 * Apache/LiteSpeed/IIS, and on nginx an unguessable folder and file names.
-	 * Override with define( 'LIVEPULL_BACKUP_DIR', '/absolute/path' ).
+	 * Where backups live: a protected LivePull folder in uploads (deny rules for Apache,
+	 * LiteSpeed and IIS, an unguessable folder name, and files that can't be read over the web
+	 * on any server, see GUARD). Can be moved with define( 'LIVEPULL_BACKUP_DIR', '/path' ).
 	 */
 	public static function dir() {
 		static $dir = null;
 		if ( null !== $dir ) {
 			return $dir;
 		}
-		$candidates = array();
 		if ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR ) {
-			$candidates[] = untrailingslashit( LIVEPULL_BACKUP_DIR );
-		}
-		$above = dirname( untrailingslashit( ABSPATH ) );
-		if ( $above && $above !== untrailingslashit( ABSPATH ) && @is_writable( $above ) ) { // phpcs:ignore
-			// One sub-folder per site: several sites can share the folder above them.
-			$candidates[] = $above . '/livepull-backups/' . self::site_folder();
-		}
-		$candidates[] = self::content_fallback();
-
-		foreach ( $candidates as $c ) {
-			if ( ( is_dir( $c ) || wp_mkdir_p( $c ) ) && wp_is_writable( $c ) ) {
-				$dir = $c;
-				break;
+			$custom = untrailingslashit( LIVEPULL_BACKUP_DIR );
+			if ( ( is_dir( $custom ) || wp_mkdir_p( $custom ) ) && wp_is_writable( $custom ) ) {
+				self::protect( $custom );
+				$dir = $custom;
+				return $dir;
 			}
 		}
-		if ( null === $dir ) {
-			$dir = self::content_fallback();
-		}
-		self::protect( $dir );
-		if ( basename( dirname( $dir ) ) === 'livepull-backups' ) {
-			self::protect( dirname( $dir ) );
-		}
-		self::migrate_old( $dir );
+		$dir = LivePull_Config::work_dir( 'backups' );
 		return $dir;
 	}
 
-	/** wp-content/livepull-backups-<random>: the random part is created once per site. */
-	private static function content_fallback() {
-		$suffix = get_option( 'livepull_backup_suffix' );
-		if ( ! $suffix || ! preg_match( '/^[a-z0-9]{24}$/', $suffix ) ) {
-			$suffix = strtolower( wp_generate_password( 24, false ) );
-			update_option( 'livepull_backup_suffix', $suffix, false );
-		}
-		return WP_CONTENT_DIR . '/livepull-backups-' . $suffix;
-	}
-
-	/** Are backups inside the website's own folder (so only deny rules / random names protect them)? */
+	/** Are backups in the uploads folder (rather than a folder chosen in wp-config.php)? */
 	public static function in_web_root() {
-		return 0 === strpos( wp_normalize_path( self::dir() ), wp_normalize_path( untrailingslashit( ABSPATH ) ) . '/' );
+		return ! ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR && wp_normalize_path( self::dir() ) === wp_normalize_path( untrailingslashit( LIVEPULL_BACKUP_DIR ) ) );
 	}
 
 	/** Deny web access (Apache, LiteSpeed, IIS); harmless where the folder isn't web-reachable. */
@@ -88,59 +63,26 @@ final class LivePull_Backup {
 		}
 	}
 
-	/** Backups made by versions before 0.5.0: move here and give them unguessable names. */
-	private static function migrate_old( $dir ) {
-		$old = WP_CONTENT_DIR . '/livepull-backups';
-		if ( $old !== $dir && is_dir( $old ) ) {
-			foreach ( (array) glob( $old . '/pre-*' ) as $f ) {
-				if ( preg_match( self::NAME_RE, basename( $f ) ) ) {
-					LivePull_Config::fs()->move( $f, $dir . '/' . basename( $f ), false );
-				}
-			}
-			if ( ! glob( $old . '/pre-*' ) ) {
-				LivePull_Config::fs()->delete( $old, true );
-			}
-		}
-		foreach ( array_unique( array( $old, $dir ) ) as $from ) {
-			foreach ( (array) glob( $from . '/pre-pull-*' ) as $f ) {
-				if ( preg_match( '/^pre-(pull|copy)-(\d{8})-(\d{6})\.(sql(?:\.gz)?)$/', basename( $f ), $m ) ) {
-					@rename( $f, $dir . '/pre-' . $m[1] . '-' . $m[2] . '-' . $m[3] . '-' . self::token() . '.' . $m[4] ); // phpcs:ignore
-				}
-			}
-		}
-	}
-
-	public static function site_folder() {
-		return sanitize_file_name( basename( untrailingslashit( ABSPATH ) ) ) . '-' . substr( md5( ABSPATH . '|' . DB_NAME . '|' . $GLOBALS['wpdb']->prefix ), 0, 10 );
-	}
-
 	private static function token() {
 		return bin2hex( random_bytes( 8 ) );
 	}
 
 	/**
-	 * Backups that have to live inside the website folder are saved as .sql.php files that start
-	 * with this line: requested over the web, PHP runs it and stops, so the contents can't be
-	 * downloaded even on servers that ignore .htaccess (nginx). Restore skips the line.
+	 * Files in the uploads folder are saved as .php files that start with this line: requested
+	 * over the web, PHP runs it and stops, so the contents can't be downloaded even on servers
+	 * that ignore .htaccess (nginx). Reading skips the line.
 	 */
 	const GUARD = "<?php exit; ?>\n";
 
-	private static function new_name( $full, $gz ) {
-		$base = ( $full ? 'pre-copy-' : 'pre-pull-' ) . gmdate( 'Ymd-His' ) . '-' . self::token() . '.sql';
-		if ( self::in_web_root() ) {
+	private static function new_name( $full ) {
+		$base = ( $full ? 'pre-copy-' : 'pre-pull-' ) . gmdate( 'Ymd-His' ) . '-' . self::token() . '.lpb';
+		if ( self::in_web_root() || ! function_exists( 'gzopen' ) ) {
 			return $base . '.php'; // Uncompressed, so the guard line works.
 		}
-		return $base . ( $gz ? '.gz' : '' );
+		return $base . '.gz';
 	}
 
-	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.sql(\.gz|\.php)?$/';
-
-	/** Start a guarded (.php) backup file with its guard line. */
-	private static function guard_file( $file ) {
-		if ( '.php' === substr( $file, -4 ) && ! file_exists( $file ) ) {
-			file_put_contents( $file, self::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-		}
-	}
+	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.lpb(\.gz|\.php)$/';
 
 	/** @return string|WP_Error Backup file path. */
 	public static function create( $full = false, $keep = '' ) {
@@ -155,42 +97,16 @@ final class LivePull_Backup {
 			return new WP_Error( 'livepull_disk', sprintf( 'Not enough free disk space for a backup (%1$s free, about %2$s needed), so nothing was changed. Free up space or delete old backups in %3$s.', size_format( $free ), size_format( $need ), $dir ) );
 		}
 
-		if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
-			$file   = $dir . '/' . self::new_name( $full, false );
-			$target = '.php' === substr( $file, -4 ) ? $file . '.part' : $file;
-			$tables = $full ? '' : ' --tables=' . escapeshellarg( implode( ',', self::existing( self::tables( false ) ) ) );
-			$res    = WP_CLI::runcommand( 'db export ' . escapeshellarg( $target ) . $tables . ' --quiet', array( 'return' => 'all', 'exit_error' => false, 'launch' => true ) );
-			if ( 0 === $res->return_code ) {
-				if ( $target !== $file ) {
-					self::guard_file( $file );
-					$in  = fopen( $target, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-					$out = fopen( $file, 'ab' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-					stream_copy_to_stream( $in, $out );
-					fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-					fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
-					wp_delete_file( $target );
-				}
-				self::prune( $keep );
-				return $file;
+		$st = self::chunk_start( $full );
+		do {
+			$done = self::chunk_step( $st, '__return_false', false );
+			if ( is_wp_error( $done ) ) {
+				wp_delete_file( $st['file'] );
+				return $done;
 			}
-			wp_delete_file( $target );
-			// Fall through to the PHP dump (e.g. mysqldump missing).
-		}
-
-		$file = $dir . '/' . self::new_name( $full, function_exists( 'gzopen' ) );
-		$res  = self::php_dump( $file, $full );
-		if ( is_wp_error( $res ) ) {
-			return $res;
-		}
+		} while ( ! $done );
 		self::prune( $keep );
-		return $file;
-	}
-
-	private static function existing( array $tables ) {
-		global $wpdb;
-		return array_values( array_filter( $tables, function ( $t ) use ( $wpdb ) {
-			return $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $t ) ) ) === $t;
-		} ) );
+		return $st['file'];
 	}
 
 	private static function tables( $full = false ) {
@@ -203,7 +119,7 @@ final class LivePull_Backup {
 			} ) );
 		}
 		// Pulls never create or change users, so pull backups leave out users and password hashes.
-		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->options, LivePull_Config::table() );
+		$tables = array( $wpdb->posts, $wpdb->postmeta, $wpdb->terms, $wpdb->termmeta, $wpdb->term_taxonomy, $wpdb->term_relationships, $wpdb->comments, $wpdb->commentmeta, $wpdb->options, LivePull_Config::table() );
 		if ( function_exists( 'wc_get_attribute_taxonomies' ) ) {
 			$tables[] = $wpdb->prefix . 'woocommerce_attribute_taxonomies';
 			$tables[] = $wpdb->prefix . 'wc_product_meta_lookup';
@@ -211,64 +127,14 @@ final class LivePull_Backup {
 		return apply_filters( 'livepull_backup_tables', $tables );
 	}
 
-	private static function php_dump( $file, $full = false ) {
-		global $wpdb;
-		$gz = '.gz' === substr( $file, -3 );
-		self::guard_file( $file );
-		$fh = $gz ? gzopen( $file, 'wb6' ) : fopen( $file, 'ab' ); // phpcs:ignore
-		if ( ! $fh ) {
-			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $file ) );
-		}
-		$write = function ( $s ) use ( $fh, $gz ) {
-			$gz ? gzwrite( $fh, $s ) : fwrite( $fh, $s ); // phpcs:ignore
-		};
-		$escape = function ( $v ) use ( $wpdb ) {
-			if ( null === $v ) {
-				return 'NULL';
-			}
-			if ( $wpdb->dbh instanceof mysqli ) {
-				// Backups are SQL files replayed by restore() straight to MySQL, so values need the
-				// connection's native escaping ($wpdb's escaping adds placeholders meant for $wpdb->query).
-				return "'" . mysqli_real_escape_string( $wpdb->dbh, $v ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string
-			}
-			return "'" . addslashes( $v ) . "'";
-		};
+	/* ------------------------------------------------ Step by step (large databases) */
 
-		$write( "-- LivePull backup " . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
-		foreach ( self::tables( $full ) as $table ) {
-			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
-				continue;
-			}
-			$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $table ), ARRAY_N );
-			$write( "DROP TABLE IF EXISTS `{$table}`;\n" . $create[1] . ";\n\n" );
-			$offset = 0;
-			do {
-				$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 500', $table, $offset ), ARRAY_N );
-				if ( $rows ) {
-					$values = array();
-					foreach ( $rows as $row ) {
-						$values[] = '(' . implode( ',', array_map( $escape, $row ) ) . ')';
-					}
-					$write( "INSERT INTO `{$table}` VALUES\n" . implode( ",\n", $values ) . ";\n" );
-				}
-				$offset += 500;
-			} while ( count( $rows ) === 500 );
-			$write( "\n" );
-		}
-		$write( "SET FOREIGN_KEY_CHECKS=1;\n" );
-		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
-		return true;
-	}
-
-	/* ------------------------------------------------ Step-by-step (large databases) */
-
-	/** Start a backup that's written a few thousand rows at a time across requests. */
+	/** Start a backup that can be written a few thousand rows at a time across requests. */
 	public static function chunk_start( $full = true ) {
-		$file = self::dir() . '/' . self::new_name( $full, function_exists( 'gzopen' ) );
 		return array(
-			'file'   => $file,
-			'gz'     => '.gz' === substr( $file, -3 ),
+			'file'   => self::dir() . '/' . self::new_name( $full ),
 			'tables' => self::tables( $full ),
+			'full'   => (bool) $full,
 			'ti'     => 0,
 			'offset' => 0,
 			'begun'  => false,
@@ -279,61 +145,64 @@ final class LivePull_Backup {
 	 * Write until $out() says time's up. @return bool|WP_Error true when finished.
 	 * Each call appends to the file (gzip files may hold several members; every reader handles that).
 	 */
-	public static function chunk_step( array &$st, callable $out ) {
+	public static function chunk_step( array &$st, callable $out, $prune = true ) {
 		global $wpdb;
-		self::guard_file( $st['file'] );
-		$fh = $st['gz'] ? gzopen( $st['file'], 'ab6' ) : fopen( $st['file'], 'ab' ); // phpcs:ignore
+		$gz = '.gz' === substr( $st['file'], -3 );
+		if ( ! $gz && ! file_exists( $st['file'] ) ) {
+			file_put_contents( $st['file'], self::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		}
+		$fh = $gz ? gzopen( $st['file'], 'ab6' ) : fopen( $st['file'], 'ab' ); // phpcs:ignore
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
 		}
-		$gz    = $st['gz'];
-		$write = function ( $s ) use ( $fh, $gz ) {
-			$gz ? gzwrite( $fh, $s ) : fwrite( $fh, $s ); // phpcs:ignore
-		};
-		$esc = function ( $v ) use ( $wpdb ) {
-			if ( null === $v ) {
-				return 'NULL';
-			}
-			return "'" . ( $wpdb->dbh instanceof mysqli ? mysqli_real_escape_string( $wpdb->dbh, $v ) : addslashes( $v ) ) . "'"; // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string -- see dump(): native escaping for SQL files.
+		$write = function ( $data ) use ( $fh, $gz ) {
+			$line = wp_json_encode( $data ) . "\n";
+			$gz ? gzwrite( $fh, $line ) : fwrite( $fh, $line ); // phpcs:ignore
 		};
 		if ( ! $st['begun'] ) {
-			$write( '-- LivePull backup ' . gmdate( 'c' ) . "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n" );
+			$write( array( 'format' => self::FORMAT, 'time' => time(), 'full' => $st['full'], 'prefix' => $wpdb->prefix ) );
 			$st['begun'] = true;
 		}
-		$done = false;
+		$done  = false;
+		$error = null;
 		while ( ! $out() ) {
 			if ( $st['ti'] >= count( $st['tables'] ) ) {
-				$write( "SET FOREIGN_KEY_CHECKS=1;\n" );
 				$done = true;
 				break;
 			}
 			$table = $st['tables'][ $st['ti'] ];
 			if ( 0 === $st['offset'] ) {
-				$create = $wpdb->get_row( $wpdb->prepare( 'SHOW CREATE TABLE %i', $table ), ARRAY_N );
-				if ( ! $create ) {
+				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
 					$st['ti']++;
 					continue;
 				}
-				$write( "DROP TABLE IF EXISTS `{$table}`;\n" . $create[1] . ";\n\n" );
-			}
-			$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 1000', $table, $st['offset'] ), ARRAY_N );
-			if ( $rows ) {
-				$values = array();
-				foreach ( $rows as $row ) {
-					$values[] = '(' . implode( ',', array_map( $esc, $row ) ) . ')';
+				$desc = LivePull_Schema::describe( $table );
+				if ( is_wp_error( $desc ) ) {
+					$error = $desc;
+					break;
 				}
-				$write( "INSERT INTO `{$table}` VALUES\n" . implode( ",\n", $values ) . ";\n" );
+				$write( array( 'table' => $table, 'schema' => $desc ) );
 			}
-			if ( count( $rows ) < 1000 ) {
+			$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 500', $table, $st['offset'] ), ARRAY_N );
+			if ( $rows ) {
+				foreach ( $rows as &$row ) {
+					$row = array_map( array( 'LivePull_Schema', 'pack' ), $row );
+				}
+				unset( $row );
+				$write( array( 'rows' => $rows ) );
+			}
+			if ( count( (array) $rows ) < 500 ) {
 				$st['ti']++;
 				$st['offset'] = 0;
-				$write( "\n" );
 			} else {
-				$st['offset'] += 1000;
+				$st['offset'] += 500;
 			}
 		}
 		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
-		if ( $done ) {
+		if ( $error ) {
+			return $error;
+		}
+		if ( $done && $prune ) {
 			self::prune();
 		}
 		return $done;
@@ -393,9 +262,9 @@ final class LivePull_Backup {
 	 * Put the database back to how it was in a backup (undo a pull).
 	 *
 	 * All or nothing: the backup is loaded into temporary copies of its tables, and only when
-	 * every statement has succeeded are they switched in, all at the same instant. If anything
-	 * fails, the temporary copies are dropped and this site is exactly as it was.
-	 * Reads statement by statement, so large backups don't need much memory.
+	 * every table has loaded are they switched in, all at the same instant. If anything fails,
+	 * the temporary copies are dropped and this site is exactly as it was.
+	 * Reads line by line, so large backups don't need much memory.
 	 *
 	 * @return true|WP_Error
 	 */
@@ -409,37 +278,60 @@ final class LivePull_Backup {
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_restore', 'Could not open ' . basename( $file ) );
 		}
-		$run = function ( $sql ) use ( $wpdb ) {
-			// Restoring replays LivePull's own SQL file exactly. $wpdb->query() would refuse rows
-			// it can't validate against the table's character set.
-			if ( $wpdb->dbh instanceof mysqli ) {
-				return mysqli_query( $wpdb->dbh, $sql ) ? true : mysqli_error( $wpdb->dbh ); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_query, WordPress.DB.RestrictedFunctions.mysql_mysqli_error
-			}
-			return false === $wpdb->query( $sql ) ? $wpdb->last_error : true; // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		};
 		$history = LivePull_History::all();
 		self::drop_restore_tables();
-		$run( 'SET FOREIGN_KEY_CHECKS=0' );
 		$tables = array();
-		$tag    = substr( md5( (string) microtime( true ) ), 0, 4 );
-		$buf    = '';
+		$cols   = array();
+		$tmp    = '';
 		$error  = '';
+		$first  = true;
 		while ( true ) {
 			$line = $gz ? gzgets( $fh ) : fgets( $fh );
 			if ( false === $line ) {
 				break;
 			}
-			if ( '' === $buf && ( '' === trim( $line ) || 0 === strpos( $line, '--' ) || 0 === strpos( $line, '<?php' ) ) ) {
+			if ( '' === trim( $line ) || 0 === strpos( $line, '<?php' ) ) {
 				continue;
 			}
-			$buf .= $line;
-			if ( ';' === substr( rtrim( $line ), -1 ) ) {
-				$ok = $run( self::to_restore_tables( $buf, $tables, $tag ) );
-				if ( true !== $ok ) {
-					$error = $ok;
+			$data = json_decode( $line, true );
+			if ( $first ) {
+				$first = false;
+				if ( ! is_array( $data ) || ! isset( $data['format'] ) || self::FORMAT !== $data['format'] ) {
+					$error = 'this isn\'t a LivePull backup this version can read';
 					break;
 				}
-				$buf = '';
+				continue;
+			}
+			if ( ! is_array( $data ) ) {
+				$error = 'the backup file is damaged';
+				break;
+			}
+			if ( isset( $data['table'], $data['schema'] ) && is_string( $data['table'] ) && is_array( $data['schema'] ) ) {
+				$real = $data['table'];
+				if ( 0 !== strpos( $real, $wpdb->prefix ) || 0 === strpos( $real, $wpdb->prefix . self::RESTORE ) || ! preg_match( '/^[A-Za-z0-9_$]+$/', $real ) ) {
+					$error = 'the backup names a table that doesn\'t belong to this site';
+					break;
+				}
+				$tmp  = self::restore_name( $real );
+				$made = LivePull_Schema::create( $tmp, $data['schema'] );
+				if ( is_wp_error( $made ) ) {
+					$error = 'table ' . $real . ': ' . $made->get_error_message();
+					break;
+				}
+				$tables[ $real ] = $tmp;
+				$cols            = wp_list_pluck( $data['schema']['columns'], 'name' );
+				continue;
+			}
+			if ( isset( $data['rows'] ) && is_array( $data['rows'] ) && '' !== $tmp ) {
+				$rows = array();
+				foreach ( $data['rows'] as $row ) {
+					$rows[] = array_map( array( 'LivePull_Schema', 'unpack' ), (array) $row );
+				}
+				$ok = LivePull_Schema::insert( $tmp, $cols, $rows );
+				if ( is_wp_error( $ok ) ) {
+					$error = $ok->get_error_message();
+					break;
+				}
 			}
 		}
 		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
@@ -451,33 +343,34 @@ final class LivePull_Backup {
 			// Switch every restored table in at once; keep the current ones until that worked.
 			$renames = array();
 			$olds    = array();
-			foreach ( $tables as $real => $tmp ) {
+			foreach ( $tables as $real => $new ) {
 				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $real ) ) ) === $real ) {
-					$old       = self::restore_name( $real, 'old' );
-					$renames[] = '`' . $real . '` TO `' . $old . '`';
-					$olds[]    = $old;
+					$old              = self::restore_name( $real, 'old' );
+					$renames[ $real ] = $old;
+					$olds[]           = $old;
 				}
-				$renames[] = '`' . $tmp . '` TO `' . $real . '`';
 			}
-			$ok = $run( 'RENAME TABLE ' . implode( ', ', $renames ) );
-			if ( true !== $ok ) {
-				$error = $ok;
+			foreach ( $tables as $real => $new ) {
+				$renames[ $new ] = $real;
+			}
+			$ok = LivePull_Schema::rename( $renames );
+			if ( is_wp_error( $ok ) ) {
+				$error = $ok->get_error_message();
 			} else {
 				foreach ( $olds as $old ) {
-					$run( 'DROP TABLE IF EXISTS `' . $old . '`' );
+					$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $old ) );
 				}
 			}
 		}
 		if ( $error ) {
 			self::drop_restore_tables();
 		}
-		$run( 'SET FOREIGN_KEY_CHECKS=1' );
 		wp_cache_flush();
 		if ( $error ) {
-			return new WP_Error( 'livepull_restore', 'Restore stopped with a database error, so nothing was changed: ' . $error );
+			return new WP_Error( 'livepull_restore', 'Restore stopped, so nothing was changed: ' . $error );
 		}
-		// Backups are taken at the start of a pull, so they contain that pull's lock (old
-		// transient style, or the lock row). Nothing restored is running: clear both.
+		// Backups are taken at the start of a pull, so they contain that pull's lock. Nothing
+		// restored is running: clear it.
 		delete_transient( 'livepull_lock' );
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s", LivePull_Puller::LOCK ) );
 		wp_cache_delete( LivePull_Puller::LOCK, 'options' );
@@ -493,39 +386,6 @@ final class LivePull_Backup {
 		$rest = substr( $table, strlen( $wpdb->prefix ) );
 		$name = $wpdb->prefix . self::RESTORE . ( 'old' === $kind ? 'o_' : 'n_' ) . $rest;
 		return strlen( $name ) <= 64 ? $name : $wpdb->prefix . self::RESTORE . ( 'old' === $kind ? 'o_' : 'n_' ) . substr( md5( $rest ), 0, 20 );
-	}
-
-	/** Point a backup statement at the temporary copy of its table. */
-	private static function to_restore_tables( $sql, array &$tables, $tag ) {
-		global $wpdb;
-		$prefix = $wpdb->prefix;
-		$map    = function ( $name ) use ( &$tables, $prefix ) {
-			if ( 0 !== strpos( $name, $prefix ) || 0 === strpos( $name, $prefix . self::RESTORE ) ) {
-				return $name;
-			}
-			if ( ! isset( $tables[ $name ] ) ) {
-				$tables[ $name ] = self::restore_name( $name );
-			}
-			return $tables[ $name ];
-		};
-		$sql = preg_replace_callback(
-			'/^(\s*(?:\/\*!\d+\s+)?(?:DROP TABLE IF EXISTS|DROP TABLE|CREATE TABLE IF NOT EXISTS|CREATE TABLE|INSERT INTO|INSERT IGNORE INTO|REPLACE INTO|LOCK TABLES|ALTER TABLE)\s+)`([^`]+)`/i',
-			function ( $m ) use ( $map ) {
-				return $m[1] . '`' . $map( $m[2] ) . '`';
-			},
-			$sql,
-			1
-		);
-		if ( preg_match( '/^\s*CREATE TABLE/i', $sql ) ) {
-			// Foreign keys: point at the temporary tables, and give constraints unique names.
-			$sql = preg_replace_callback( '/REFERENCES\s+`([^`]+)`/i', function ( $m ) use ( $map ) {
-				return 'REFERENCES `' . $map( $m[1] ) . '`';
-			}, $sql );
-			$sql = preg_replace_callback( '/CONSTRAINT\s+`([^`]+)`/i', function ( $m ) use ( $tag ) {
-				return 'CONSTRAINT `' . substr( $m[1], 0, 56 ) . '_r' . $tag . '`';
-			}, $sql );
-		}
-		return $sql;
 	}
 
 	private static function drop_restore_tables() {

@@ -12,7 +12,13 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
 global $wpdb;
 
-$livepull_options = $wpdb->get_col( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'livepull\\_%' OR option_name LIKE '\\_transient\\_livepull\\_%' OR option_name LIKE '\\_transient\\_timeout\\_livepull\\_%' OR option_name LIKE '\\_site\\_transient\\_livepull\\_%' OR option_name LIKE '\\_site\\_transient\\_timeout\\_livepull\\_%'" );
+$livepull_like    = array_map(
+	function ( $p ) use ( $wpdb ) {
+		return $wpdb->esc_like( $p ) . '%';
+	},
+	array( 'livepull_', '_transient_livepull_', '_transient_timeout_livepull_', '_site_transient_livepull_', '_site_transient_timeout_livepull_' )
+);
+$livepull_options = $wpdb->get_col( $wpdb->prepare( 'SELECT option_name FROM %i WHERE option_name LIKE %s OR option_name LIKE %s OR option_name LIKE %s OR option_name LIKE %s OR option_name LIKE %s', $wpdb->options, $livepull_like[0], $livepull_like[1], $livepull_like[2], $livepull_like[3], $livepull_like[4] ) );
 foreach ( $livepull_options as $livepull_option ) {
 	delete_option( $livepull_option );
 }
@@ -28,34 +34,21 @@ $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->commentmeta} WHERE meta_key =
 wp_clear_scheduled_hook( 'livepull_daily' );
 wp_clear_scheduled_hook( 'livepull_scheduled_pull' );
 
-// Backups: wherever LivePull kept them.
-$livepull_site = sanitize_file_name( basename( untrailingslashit( ABSPATH ) ) ) . '-' . substr( md5( ABSPATH . '|' . DB_NAME . '|' . $wpdb->prefix ), 0, 10 );
-$livepull_dirs = array_merge( array( WP_CONTENT_DIR . '/livepull-backups', dirname( untrailingslashit( ABSPATH ) ) . '/livepull-backups/' . $livepull_site ), (array) glob( WP_CONTENT_DIR . '/livepull-backups-*', GLOB_ONLYDIR ) );
-if ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR ) {
-	$livepull_dirs[] = untrailingslashit( LIVEPULL_BACKUP_DIR );
+// LivePull's own folder in uploads: backups, Copy everything's staging, temporary lists.
+$livepull_uploads = wp_get_upload_dir();
+$livepull_dirs    = (array) glob( untrailingslashit( $livepull_uploads['basedir'] ) . '/livepull-*', GLOB_ONLYDIR );
+if ( defined( 'LIVEPULL_BACKUP_DIR' ) && LIVEPULL_BACKUP_DIR && is_dir( LIVEPULL_BACKUP_DIR ) ) {
+	foreach ( (array) glob( untrailingslashit( LIVEPULL_BACKUP_DIR ) . '/pre-*.lpb*' ) as $livepull_f ) {
+		wp_delete_file( $livepull_f );
+	}
 }
-foreach ( array_unique( $livepull_dirs ) as $livepull_dir ) {
-	if ( ! is_dir( $livepull_dir ) ) {
-		continue;
+foreach ( $livepull_dirs as $livepull_dir ) {
+	if ( ! preg_match( '#/livepull-[a-z0-9]{24}$#', wp_normalize_path( $livepull_dir ) ) ) {
+		continue; // Only LivePull's own folder.
 	}
-	foreach ( (array) glob( $livepull_dir . '/pre-*' ) as $livepull_f ) {
-		@unlink( $livepull_f ); // phpcs:ignore
-	}
-	foreach ( array( '.htaccess', 'web.config', 'index.php', 'index.html' ) as $livepull_f ) {
-		@unlink( $livepull_dir . '/' . $livepull_f ); // phpcs:ignore
-	}
-	@rmdir( $livepull_dir ); // phpcs:ignore
-}
-
-// Copy everything's temporary folders (files waiting to be moved, or kept after a failed move).
-foreach ( array_merge( (array) glob( WP_CONTENT_DIR . '/livepull-stage-*', GLOB_ONLYDIR ), (array) glob( WP_CONTENT_DIR . '/livepull-unplaced-*', GLOB_ONLYDIR ) ) as $livepull_dir ) {
 	$livepull_it = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $livepull_dir, FilesystemIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
 	foreach ( $livepull_it as $livepull_f ) {
-		$livepull_f->isDir() ? @rmdir( $livepull_f->getPathname() ) : @unlink( $livepull_f->getPathname() ); // phpcs:ignore
+		$livepull_f->isDir() ? @rmdir( $livepull_f->getPathname() ) : wp_delete_file( $livepull_f->getPathname() ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
 	}
-	@rmdir( $livepull_dir ); // phpcs:ignore
-}
-// Live's temporary uploads listings.
-foreach ( (array) glob( trailingslashit( get_temp_dir() ) . 'livepull-files-*' ) as $livepull_f ) {
-	@unlink( $livepull_f ); // phpcs:ignore
+	@rmdir( $livepull_dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
 }

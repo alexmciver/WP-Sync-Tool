@@ -72,27 +72,8 @@ class LivePull_Migrate {
 		$wpdb->update( $wpdb->postmeta, array( 'meta_key' => '_livepull_id' ), array( 'meta_key' => '_wpsync_id' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery
 		$wpdb->update( $wpdb->termmeta, array( 'meta_key' => '_livepull_id' ), array( 'meta_key' => '_wpsync_id' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery
 
-		// Backups folders.
-		self::move_backups();
-
 		update_option( 'livepull_migrated_from_wpsync', time(), false );
 		wp_cache_flush();
 	}
 
-	private static function move_backups() {
-		global $wp_filesystem;
-		require_once ABSPATH . 'wp-admin/includes/file.php';
-		if ( ! WP_Filesystem() || ! $wp_filesystem ) {
-			return;
-		}
-		$pairs = array(
-			array( dirname( untrailingslashit( ABSPATH ) ) . '/wpsync-backups', dirname( untrailingslashit( ABSPATH ) ) . '/livepull-backups' ),
-			array( WP_CONTENT_DIR . '/wpsync-backups', WP_CONTENT_DIR . '/livepull-backups' ),
-		);
-		foreach ( $pairs as $pair ) {
-			if ( $wp_filesystem->is_dir( $pair[0] ) && ! $wp_filesystem->exists( $pair[1] ) ) {
-				$wp_filesystem->move( $pair[0], $pair[1] );
-			}
-		}
-	}
 }

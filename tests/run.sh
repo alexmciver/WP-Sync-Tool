@@ -24,7 +24,7 @@ PLUGINS="${LIVEPULL_TEST_PLUGINS:-/tmp/plugins}"
 DB_USER="${DB_USER:-root}"; DB_PASS="${DB_PASS:-}"; DB_HOST="${DB_HOST:-127.0.0.1}"
 LIVE_PORT=8101; LOCAL_PORT=8102
 LIVE="$WORK/live"; LOCAL="$WORK/local"; STATE="$WORK/state"
-W_LIVE="wp --path=$LIVE --quiet"; W_LOCAL="wp --path=$LOCAL --quiet"
+W_LIVE="wp --path=$LIVE --quiet"; W_LOCAL="wp --path=$LOCAL --quiet --user=1"
 export LIVEPULL_TEST_STATE="$STATE" LIVEPULL_TEST_LIB="$ROOT/tests/lib.php"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }

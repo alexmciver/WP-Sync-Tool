@@ -143,7 +143,7 @@ final class LivePull_Rest {
 			'recording_since' => (string) get_option( 'livepull_installed', '' ),
 			'full_copy'       => LivePull_Full::allowed(),
 			'wp_version'      => get_bloginfo( 'version' ),
-			'abspath'         => LivePull_Full::allowed() ? ABSPATH : '',
+			'paths'           => LivePull_Full::allowed() ? LivePull_Config::paths() : array(),
 		);
 	}
 

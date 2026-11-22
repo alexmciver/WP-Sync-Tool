@@ -48,7 +48,7 @@ class LivePull_Schedule {
 
 	public static function settings() {
 		$s = get_option( self::OPTION, array() );
-		$s = wp_parse_args( is_array( $s ) ? $s : array(), array( 'every' => 'off', 'email' => true, 'last_run' => 0, 'last_result' => '' ) );
+		$s = wp_parse_args( is_array( $s ) ? $s : array(), array( 'every' => 'off', 'email' => true, 'last_run' => 0, 'last_result' => '', 'user' => 0 ) );
 		if ( ! isset( self::choices()[ $s['every'] ] ) ) {
 			$s['every'] = 'off';
 		}
@@ -60,6 +60,11 @@ class LivePull_Schedule {
 		$s          = self::settings();
 		$s['every'] = isset( self::choices()[ $every ] ) ? $every : 'off';
 		$s['email'] = (bool) $email;
+		// Scheduled pulls run with no one logged in: they run as the administrator who set the
+		// schedule, so WordPress filters content exactly as it would for them.
+		if ( current_user_can( 'manage_options' ) ) {
+			$s['user'] = get_current_user_id();
+		}
 		update_option( self::OPTION, $s, false );
 		wp_clear_scheduled_hook( self::HOOK );
 		if ( 'off' !== $s['every'] && LivePull_Config::remote() ) {
@@ -83,6 +88,9 @@ class LivePull_Schedule {
 		$s = self::settings();
 		if ( 'off' === $s['every'] || ! LivePull_Config::remote() ) {
 			return new WP_Error( 'livepull_schedule_off', 'Scheduled pulls are off.' );
+		}
+		if ( ! get_current_user_id() && ! empty( $s['user'] ) && user_can( (int) $s['user'], 'manage_options' ) ) {
+			wp_set_current_user( (int) $s['user'] );
 		}
 		if ( function_exists( 'set_time_limit' ) ) {
 			@set_time_limit( 600 ); // phpcs:ignore

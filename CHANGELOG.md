@@ -2,6 +2,17 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.3.0
+Changes from the WordPress.org review.
+- **WordPress's HTML filter stays on.** Pulls no longer switch it off: content is saved unfiltered only for users WordPress allows to post unfiltered HTML (administrators on a single site), exactly as if they'd pasted it in. Scheduled pulls run as the administrator who set them up; terminal pulls should use `--user=<admin>` (LivePull warns if they don't).
+- **No SQL from anywhere else is ever run.** Table structures travel as data (columns, types, defaults, indexes) and are rebuilt with prepared queries; rows are written with prepared queries; table switches use prepared renames. Column types are checked against a fixed list.
+- **New backup format.** Backups store each table's structure and rows as data (`.lpb` files) and restore through the same prepared path, all or nothing as before. Backups from earlier versions (`.sql` files) aren't listed any more; they stay where they were (next to the site's folder in `livepull-backups`, or in `wp-content/livepull-backups-…`) for you to keep or delete.
+- **One protected folder.** Backups, Copy everything's staging and live's temporary file lists all live in `uploads/livepull-<random>`, with deny rules, and private files stop if requested over the web. Nothing is written next to or outside the site's folder (unless you choose a place with `LIVEPULL_BACKUP_DIR`). Copy everything keeps that folder's name, and never copies it from live.
+- Server paths in a full copy are matched by uploads and content folder (no hard-coded paths).
+- The script-load check is attached with `wp_add_inline_script()`; no inline `<script>` and no open output buffers.
+- Readme: Contributors is now the WordPress.org username.
+- Tests for malicious table definitions and for the HTML filter rule; tested on a clean install with `WP_DEBUG` on.
+
 ## 1.2.4
 - **Conflicts can be decided straight after a check.** "Check for changes" now records the conflicts it finds, so the Conflicts tab (with Compare) shows them before you pull, and the list has a "Compare and decide now" button. "Keep mine" chosen before pulling sticks: the pull leaves your version alone without flagging it again.
 - **WordPress compatibility** shows on the Updates screen instead of "Not tested": the updater passes on "Tested up to", "Requires at least" and "Requires PHP" from the release's readme, as WordPress.org does (tested with 7.1 counts for every 7.1.x). Takes effect for updates after this one.

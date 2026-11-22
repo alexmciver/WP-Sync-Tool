@@ -3,7 +3,7 @@
  * Plugin Name:       LivePull
  * Plugin URI:        https://github.com/alexmciver/WP-Sync-Tool
  * Description:       Pull the content your client adds or edits on the live site into your local copy, without overwriting your own work. Install on both sites, then go to Tools → LivePull (or run `wp livepull` in the terminal).
- * Version:           1.2.4
+ * Version:           1.3.0
  * Requires at least: 6.2
  * Requires PHP:      7.4
  * Author:            Alex McIver
@@ -38,7 +38,7 @@ if ( LivePull_Migrate::old_plugin_active() ) {
 }
 LivePull_Migrate::maybe_run();
 
-foreach ( array( 'config', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'history', 'puller', 'full', 'health', 'schedule' ) as $livepull_file ) {
+foreach ( array( 'config', 'schema', 'ids', 'logger', 'refs', 'exporter', 'rest', 'client', 'importer', 'backup', 'history', 'puller', 'full', 'health', 'schedule' ) as $livepull_file ) {
 	require_once $livepull_dir . 'class-' . $livepull_file . '.php';
 }
 // Self-updates from GitHub: only in the GitHub download (the WordPress.org version is updated by WordPress.org).
