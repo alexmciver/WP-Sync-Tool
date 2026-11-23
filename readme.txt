@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.1
+Stable tag: 1.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -78,6 +78,10 @@ On the live site, open Tools → LivePull and look at *Recent changes recorded o
 
 A page cache or firewall on live is answering instead of WordPress. Exclude `/wp-json/` and URLs containing `rest_route=` from caching.
 
+= Are scripts and embed codes pulled? =
+
+No. LivePull only pulls content, never code. Everything that comes across (content, titles, custom fields, page-builder data and settings) goes through WordPress's own HTML filter, so scripts, event handlers and similar code are removed, whoever runs the pull. The pull report lists any item that had code removed, so you can add it on your local site if you need it.
+
 = Is multisite supported? =
 
 Not yet. WPML and Gravity Forms aren't supported yet either.
@@ -95,6 +99,10 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 5. The live site's screen: copy the connection code into your local site. That's all.
 
 == Changelog ==
+
+= 1.3.2 =
+* Pulls never bring code across: all pulled HTML, including page-builder data, custom fields and settings, goes through wp_kses_post() whoever runs the pull. The report lists anything that had code removed.
+* LivePull writes no PHP files: backups are compressed data files and live's file lists are plain text, in the protected LivePull folder in uploads.
 
 = 1.3.1 =
 * The HTML filter also covers content written after IDs are mapped (content, excerpts, term descriptions).
@@ -149,6 +157,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.3.2 =
+Scripts and other code are never pulled, for any user. New backups are compressed data files (older ones still restore). Update both sites.
 
 = 1.3.1 =
 Pulled content is filtered at every save for users without unfiltered HTML. If you use scheduled pulls, press Save under "Pull automatically" once. Update both sites.

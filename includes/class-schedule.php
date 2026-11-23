@@ -93,8 +93,8 @@ class LivePull_Schedule {
 			wp_set_current_user( (int) $s['user'] );
 		}
 		if ( ! current_user_can( 'manage_options' ) ) {
-			// Without an administrator, WordPress would filter pulled HTML (page-builder markup
-			// could be stripped), so don't pull at all.
+			// Pulls save posts, terms and settings, so they only ever run with an administrator's
+			// permissions: without one, don't pull at all.
 			$msg              = __( 'Scheduled pulls need to know which administrator they run as. Open Tools → LivePull → Settings and press Save under "Pull automatically".', 'livepull' );
 			$failed_before    = ! empty( $s['failing'] );
 			$s['last_run']    = time();

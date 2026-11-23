@@ -2,6 +2,12 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.3.2
+More changes from the WordPress.org review.
+- **Pulls never bring code across.** Every piece of pulled HTML (content, excerpts, titles, category and tag names and descriptions, page-builder data such as Elementor, Beaver Builder and Bricks, custom fields and settings) goes through `wp_kses_post()`, for administrators too. JSON builder data is filtered string by string, so layouts stay valid. Ordinary markup (blocks, shortcodes, links, images) is untouched; the pull report names any item that had scripts or other code removed.
+- **No PHP files are written.** Backups are gzip-compressed data files (`.lpb.gz`, or `.lpb` without zlib) and live's temporary file lists are plain text, all in the protected `uploads/livepull-<random>` folder (deny rules, an index file, unguessable names). The old `index.php` there is removed. Backups made by 1.3.0 and 1.3.1 are still listed and can still be restored.
+- The terminal warning for pulls without `--user` now just asks for an administrator.
+
 ## 1.3.1
 More changes from the WordPress.org review.
 - **The HTML filter also covers the final save.** After a pull maps IDs in content, excerpts and category/tag descriptions, that last write now goes through `wp_kses_post()` too, unless the person pulling may post unfiltered HTML. Before, only the first save was filtered.

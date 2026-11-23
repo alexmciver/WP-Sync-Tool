@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.3.1';
+	const VERSION  = '1.3.2';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */
@@ -65,7 +65,7 @@ final class LivePull_Config {
 	 * LivePull's own folder in uploads (backups, Copy everything's staging, live's temporary
 	 * file lists): uploads/livepull-<random>/<sub>. The random part is made once per site, so
 	 * the folder can't be guessed; every folder in it carries deny rules for Apache, LiteSpeed
-	 * and IIS. Files that must stay private are also guarded (see LivePull_Backup::GUARD).
+	 * and IIS and an index file. LivePull writes only data files there, never PHP.
 	 */
 	public static function work_dir( $sub = '' ) {
 		$suffix = get_option( 'livepull_backup_suffix' );

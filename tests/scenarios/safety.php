@@ -62,7 +62,18 @@ if ( 'verify' === $phase ) {
 	wp_set_current_user( $admin_id );
 	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
 	t_ok( false === has_filter( 'content_save_pre', 'wp_filter_post_kses' ), 'an administrator\'s pull saves content as live has it (filter off, as WordPress decides)' );
-	t_eq( LivePull_Importer::html( $evil ), $evil, "an administrator's content written after ID mapping is kept as live has it" );
+	$kept = LivePull_Importer::html( $evil );
+	t_ok( false === stripos( $kept, '<script' ) && false === stripos( $kept, 'javascript:' ) && false === stripos( $kept, 'onclick' ) && false !== strpos( $kept, '<p>Hi</p>' ), "an administrator's pull doesn't bring code across either" );
+	$safe = '<!-- wp:paragraph --><p class="x">Hello <a href="https://example.com">there</a> [et_pb_text]Hi[/et_pb_text]</p><!-- /wp:paragraph -->';
+	t_eq( LivePull_Importer::html( $safe ), $safe, 'ordinary block, shortcode and link markup is untouched' );
+	$builder = wp_json_encode( array( array( 'id' => 'a1', 'settings' => array( 'html' => '<div>ok</div><script>alert(1)</script>', 'title' => 'T' ), 'elements' => array( array( 'settings' => array( 'editor' => '<img src="x.jpg" onerror="alert(1)">' ) ) ) ) ) );
+	$clean   = json_decode( LivePull_Importer::html( $builder ), true );
+	t_ok( is_array( $clean ) && '<div>ok</div>' === trim( preg_replace( '/alert\(1\)/', '', $clean[0]['settings']['html'] ) ) && false === stripos( $clean[0]['elements'][0]['settings']['editor'], 'onerror' ) && 'T' === $clean[0]['settings']['title'], 'page-builder JSON loses its code but stays valid JSON with the same structure' );
+	$ser = LivePull_Importer::clean_raw( serialize( array( 'field' => '<p>Text</p><script src="https://evil.test/x.js"></script>', 'n' => 5 ) ) );
+	$un  = unserialize( $ser );
+	t_ok( is_array( $un ) && '<p>Text</p>' === $un['field'] && 5 === $un['n'], 'custom fields (serialized) lose their code and keep their shape' );
+	t_eq( LivePull_Importer::clean_raw( 'a:1:{s:1:"k";s:5:"plain";}' ), 'a:1:{s:1:"k";s:5:"plain";}', 'values without HTML are stored byte for byte' );
+	t_eq( LivePull_Importer::clean( array( 'blogname' => 'Site <script>x</script>' ) ), array( 'blogname' => 'Site x' ), 'pulled settings lose code too' );
 	wp_set_current_user( 0 );
 	wp_delete_user( $author_id );
 
@@ -151,6 +162,22 @@ if ( 'verify' === $phase ) {
 	$oldest = end( $all )['file'];
 	LivePull_Backup::create( false, $oldest ); // What restoring it does first.
 	t_ok( file_exists( $oldest ), 'restoring the oldest of 10 backups keeps that backup' );
+	t_ok( '.php' !== substr( $file, -4 ), 'backups are data files, not PHP (' . basename( $file ) . ')' );
+	// A backup left by 1.3.0/1.3.1 (guard line first) is still listed and restorable.
+	$now       = LivePull_Backup::create(); // The site as it is, so restoring changes nothing.
+	$old_style = dirname( $now ) . '/pre-pull-20200101-000000-00000000000000aa.lpb.php';
+	file_put_contents( $old_style, "<?php exit; ?>\n" . implode( '', '.gz' === substr( $now, -3 ) ? gzfile( $now ) : file( $now ) ) );
+	t_ok( in_array( $old_style, wp_list_pluck( LivePull_Backup::all(), 'file' ), true ) && true === LivePull_Backup::restore( $old_style ), 'backups from 1.3.0/1.3.1 still list and restore' );
+	wp_delete_file( $old_style );
+	file_put_contents( LivePull_Config::work_dir() . '/index.php', "<?php // Silence.\n" );
+	LivePull_Config::work_dir( 'backups' );
+	$php = array();
+	foreach ( new RecursiveIteratorIterator( new RecursiveDirectoryIterator( LivePull_Config::work_dir(), FilesystemIterator::SKIP_DOTS ) ) as $f ) {
+		if ( preg_match( '/\.php$/', $f->getFilename() ) ) {
+			$php[] = $f->getPathname();
+		}
+	}
+	t_eq( $php, array(), 'LivePull\'s folder holds no PHP files (old index.php removed)' );
 	wp_delete_post( $p, true );
 }
 

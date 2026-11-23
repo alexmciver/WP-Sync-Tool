@@ -288,7 +288,7 @@ final class LivePull_Full {
 		// never share one, and a listing is never rebuilt part-way (that could change its order).
 		$token = preg_replace( '/[^A-Za-z0-9]/', '', (string) $r['token'] );
 		$lists = LivePull_Config::work_dir( 'lists' );
-		$index = $lists . '/files-' . md5( $base . '|' . LivePull_Config::secret() . '|' . $token ) . '.php';
+		$index = $lists . '/files-' . md5( $base . '|' . LivePull_Config::secret() . '|' . $token ) . '.txt';
 		if ( 0 === $offset ) {
 			foreach ( (array) glob( $lists . '/files-*' ) as $old ) {
 				if ( filemtime( $old ) < time() - DAY_IN_SECONDS ) {
@@ -304,7 +304,6 @@ final class LivePull_Full {
 		}
 		// Plain line-by-line reading (SplFileObject::seek() returns the wrong line before PHP 8.0.1).
 		$fh    = fopen( $index, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-		fgets( $fh ); // The guard line.
 		$total = (int) trim( (string) fgets( $fh ) ); // Then: how many files.
 		for ( $i = 0; $i < $offset && false !== fgets( $fh ); $i++ ) {
 			// Skip to this page.
@@ -337,12 +336,11 @@ final class LivePull_Full {
 	/** Write every uploads file path (one per line, count first) to $index. @return int|WP_Error */
 	private static function write_file_index( $base, $index ) {
 		$skip = self::skipped_dirs();
-		$tmp  = $index . '.part.php';
+		$tmp  = $index . '.part';
 		$out  = fopen( $tmp, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
 		if ( ! $out ) {
 			return new WP_Error( 'livepull_files', 'Could not write a temporary file listing on live.', array( 'status' => 500 ) );
 		}
-		fwrite( $out, LivePull_Backup::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
 		$count = 0;
 		$it    = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $base, FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $it as $file ) {
@@ -368,8 +366,7 @@ final class LivePull_Full {
 		// Count goes first: write it, then the list.
 		$final = fopen( $index, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
 		$in    = fopen( $tmp, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen
-		fwrite( $final, LivePull_Backup::GUARD . $count . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
-		fgets( $in ); // Skip the part file's own guard line.
+		fwrite( $final, $count . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
 		stream_copy_to_stream( $in, $final );
 		fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 		fclose( $final ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose

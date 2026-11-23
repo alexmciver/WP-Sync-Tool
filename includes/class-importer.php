@@ -165,9 +165,9 @@ final class LivePull_Importer {
 		$items = self::sort_items( $items );
 
 		LivePull_Logger::suspend();
-		// WordPress's HTML filter (kses) stays exactly as WordPress set it for the person running
-		// the pull: content is saved unfiltered only for users allowed to post unfiltered HTML
-		// (administrators on a single site), just as if they had pasted it in themselves.
+		// Pulls never bring code across: every piece of pulled HTML (content, excerpts,
+		// descriptions, builder data, custom fields, options) goes through wp_kses_post(),
+		// whoever runs the pull. See self::html().
 		remove_action( 'post_updated', 'wp_save_post_revision', 10 );
 		// Never let a pull trigger outgoing side effects from the local site.
 		remove_action( 'publish_post', '_publish_post_hook', 5 ); // pingbacks/enclosures
@@ -177,12 +177,16 @@ final class LivePull_Importer {
 
 		try {
 			foreach ( $items as $item ) {
+				self::$stripped = false;
 				$this->handle( $item );
+				$this->note_stripped( $item );
 			}
 			// The queue can grow while we go (fetched dependencies), so no foreach.
 			for ( $i = 0; $i < count( $this->ref_queue ); $i++ ) {
 				list( $item, $id ) = $this->ref_queue[ $i ];
+				self::$stripped = false;
 				$this->apply_refs( $item, $id );
+				$this->note_stripped( $item );
 			}
 			foreach ( $this->ref_queue as $done ) {
 				if ( in_array( $done[0]['type'], array( 'post', 'term' ), true ) ) {
@@ -540,7 +544,7 @@ final class LivePull_Importer {
 			}
 			$value = $cur;
 		}
-		update_option( $o['name'], $value );
+		update_option( $o['name'], self::clean( $value ) );
 	}
 
 	/** @return int local ID (0 if not created) */
@@ -861,7 +865,7 @@ final class LivePull_Importer {
 		}
 
 		// Parent, content and excerpt, written once their IDs are mapped. The final HTML goes
-		// through the same kses rule as a normal save (see self::html()).
+		// through wp_kses_post() (see self::html()).
 		$wpdb->update(
 			$wpdb->posts,
 			array(
@@ -895,17 +899,103 @@ final class LivePull_Importer {
 		}
 	}
 
+	/** Set when html() removed code from the item being imported. */
+	private static $stripped = false;
+
+	/** Code that kses removes: scripts, frames, embeds, styles, event handlers, javascript: links. */
+	const CODE_RE = '/<\s*(script|iframe|object|embed|style|form|meta|link|base)\b|\son[a-z]+\s*=|javascript\s*:/i';
+
 	/**
-	 * HTML written straight to the database gets the same rule WordPress applies on a normal
-	 * save: kept as is for users allowed unfiltered HTML, otherwise run through wp_kses_post().
-	 * Values are stored slash-free here, so no wp_slash/wp_unslash round trip is needed.
+	 * Pulled HTML never carries code: it always goes through wp_kses_post(), whoever runs the
+	 * pull (administrators included), so scripts, frames, event handlers and javascript: links
+	 * are removed. JSON (page-builder data, form definitions) is filtered string by string so
+	 * its structure stays valid. Values are stored slash-free here, so no slashing is needed.
 	 */
 	public static function html( $html ) {
 		$html = (string) $html;
-		if ( '' === $html || current_user_can( 'unfiltered_html' ) ) {
+		if ( '' === $html || ( false === strpos( $html, '<' ) && false === stripos( $html, 'u003c' ) && false === stripos( $html, 'javascript' ) && false === stripos( $html, ' on' ) ) ) {
 			return $html;
 		}
-		return wp_kses_post( $html );
+		$t = ltrim( $html );
+		if ( '' !== $t && ( '{' === $t[0] || '[' === $t[0] ) ) {
+			$data = json_decode( $html, true );
+			if ( is_array( $data ) ) {
+				$clean = self::clean( $data );
+				return $clean === $data ? $html : wp_json_encode( $clean );
+			}
+		}
+		if ( false === strpos( $html, '<' ) && ! preg_match( self::CODE_RE, $html ) ) {
+			return $html;
+		}
+		$out = wp_kses_post( $html );
+		if ( $out !== $html && preg_match( self::CODE_RE, $html ) ) {
+			self::$stripped = true;
+		}
+		return $out;
+	}
+
+	/** Every string inside a value (arrays and plain objects, any depth) through html(). */
+	public static function clean( $value ) {
+		if ( is_string( $value ) ) {
+			return self::html( $value );
+		}
+		if ( is_array( $value ) ) {
+			foreach ( $value as $k => $v ) {
+				$value[ $k ] = self::clean( $v );
+			}
+			return $value;
+		}
+		if ( $value instanceof stdClass ) {
+			$out = clone $value;
+			foreach ( get_object_vars( $out ) as $k => $v ) {
+				$out->$k = self::clean( $v );
+			}
+			return $out;
+		}
+		return $value;
+	}
+
+	/** A stored (possibly serialized) meta value with any code removed. */
+	public static function clean_raw( $raw ) {
+		if ( false === strpos( $raw, '<' ) && false === stripos( $raw, 'u003c' ) && false === stripos( $raw, 'javascript' ) && false === stripos( $raw, ' on' ) ) {
+			return $raw;
+		}
+		$value = LivePull_Payload::unserialize( $raw );
+		if ( is_string( $value ) ) {
+			return self::html( $value );
+		}
+		if ( self::has_inert_object( $value ) ) {
+			// Objects of other classes can't be rebuilt safely; keep only their plain text.
+			self::$stripped = self::$stripped || (bool) preg_match( self::CODE_RE, $raw );
+			return preg_match( self::CODE_RE, $raw ) ? maybe_serialize( '' ) : $raw;
+		}
+		$clean = self::clean( $value );
+		return $clean == $value ? $raw : maybe_serialize( $clean ); // phpcs:ignore Universal.Operators.StrictComparisons -- stdClass copies compare by value.
+	}
+
+	private static function has_inert_object( $value ) {
+		if ( is_object( $value ) && ! ( $value instanceof stdClass ) ) {
+			return true;
+		}
+		if ( is_array( $value ) || $value instanceof stdClass ) {
+			foreach ( (array) $value as $v ) {
+				if ( self::has_inert_object( $v ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** Tell the person pulling when code was taken out of an item. */
+	private function note_stripped( array $item ) {
+		if ( self::$stripped ) {
+			$note = sprintf( '%s: scripts or other code in it were removed (LivePull only pulls safe HTML). Add them on this site if you need them.', self::label( $item ) );
+			if ( ! in_array( $note, $this->report['skipped'], true ) ) {
+				$this->report['skipped'][] = $note;
+			}
+			self::$stripped = false;
+		}
 	}
 
 	/** @internal Closure access for PHP 7.4. */
@@ -921,9 +1011,9 @@ final class LivePull_Importer {
 		$data = array(
 			'post_type'      => $p['post_type'],
 			'post_status'    => $p['post_status'],
-			'post_title'     => $this->urls( $p['post_title'] ),
-			'post_content'   => $this->urls( $p['post_content'] ), // IDs rewritten in the refs pass.
-			'post_excerpt'   => $this->urls( $p['post_excerpt'] ),
+			'post_title'     => self::html( $this->urls( $p['post_title'] ) ),
+			'post_content'   => self::html( $this->urls( $p['post_content'] ) ), // IDs rewritten in the refs pass.
+			'post_excerpt'   => self::html( $this->urls( $p['post_excerpt'] ) ),
 			'post_name'      => $p['post_name'],
 			'post_date'      => $p['post_date'],
 			'post_date_gmt'  => $p['post_date_gmt'],
@@ -989,7 +1079,7 @@ final class LivePull_Importer {
 				$local = (int) $existing->term_id;
 			}
 		}
-		$args = wp_slash( array( 'name' => $t['name'], 'slug' => $t['slug'], 'description' => $this->urls( $t['description'] ) ) );
+		$args = wp_slash( array( 'name' => self::html( $t['name'] ), 'slug' => $t['slug'], 'description' => self::html( $this->urls( $t['description'] ) ) ) );
 		$res  = $local ? wp_update_term( $local, $t['taxonomy'], $args ) : wp_insert_term( wp_slash( $t['name'] ), $t['taxonomy'], $args );
 		if ( is_wp_error( $res ) ) {
 			$existing_id = $res->get_error_data( 'term_exists' );
@@ -1046,6 +1136,7 @@ final class LivePull_Importer {
 		list( $table, $col ) = 'post' === $kind ? array( $wpdb->postmeta, 'post_id' ) : array( $wpdb->termmeta, 'term_id' );
 		$wpdb->delete( $table, array( $col => $id, 'meta_key' => $key ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 		foreach ( $raws as $raw ) {
+			$raw = self::clean_raw( (string) $raw ); // Builder data and custom fields: no code either.
 			$wpdb->insert( $table, array( $col => $id, 'meta_key' => $key, 'meta_value' => $raw ) ); // phpcs:ignore WordPress.DB.SlowDBQuery -- writes one object's own meta rows (indexed by object ID).
 		}
 		'post' === $kind ? wp_cache_delete( $id, 'post_meta' ) : wp_cache_delete( $id, 'term_meta' );

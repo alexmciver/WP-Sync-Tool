@@ -23,8 +23,9 @@ final class LivePull_Backup {
 
 	/**
 	 * Where backups live: a protected LivePull folder in uploads (deny rules for Apache,
-	 * LiteSpeed and IIS, an unguessable folder name, and files that can't be read over the web
-	 * on any server, see GUARD). Can be moved with define( 'LIVEPULL_BACKUP_DIR', '/path' ).
+	 * LiteSpeed and IIS, an index file, and an unguessable folder and file name for servers
+	 * that ignore deny rules). Backups are data files (gzip-compressed JSON lines), never
+	 * code. Can be moved with define( 'LIVEPULL_BACKUP_DIR', '/path' ).
 	 */
 	public static function dir() {
 		static $dir = null;
@@ -53,9 +54,12 @@ final class LivePull_Backup {
 		$files = array(
 			'.htaccess'  => "Require all denied\nDeny from all\n",
 			'web.config' => "<?xml version=\"1.0\"?>\n<configuration><system.webServer><authorization><deny users=\"*\" /></authorization></system.webServer></configuration>\n",
-			'index.php'  => "<?php // Silence.\n",
 			'index.html' => '',
 		);
+		// 1.3.0/1.3.1 also wrote an index.php here; LivePull writes no PHP files any more.
+		if ( is_file( $dir . '/index.php' ) && "<?php // Silence.\n" === @file_get_contents( $dir . '/index.php' ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			wp_delete_file( $dir . '/index.php' );
+		}
 		foreach ( $files as $name => $content ) {
 			if ( ! file_exists( $dir . '/' . $name ) ) {
 				@file_put_contents( $dir . '/' . $name, $content ); // phpcs:ignore
@@ -67,22 +71,13 @@ final class LivePull_Backup {
 		return bin2hex( random_bytes( 8 ) );
 	}
 
-	/**
-	 * Files in the uploads folder are saved as .php files that start with this line: requested
-	 * over the web, PHP runs it and stops, so the contents can't be downloaded even on servers
-	 * that ignore .htaccess (nginx). Reading skips the line.
-	 */
-	const GUARD = "<?php exit; ?>\n";
-
 	private static function new_name( $full ) {
 		$base = ( $full ? 'pre-copy-' : 'pre-pull-' ) . gmdate( 'Ymd-His' ) . '-' . self::token() . '.lpb';
-		if ( self::in_web_root() || ! function_exists( 'gzopen' ) ) {
-			return $base . '.php'; // Uncompressed, so the guard line works.
-		}
-		return $base . '.gz';
+		return function_exists( 'gzopen' ) ? $base . '.gz' : $base;
 	}
 
-	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.lpb(\.gz|\.php)$/';
+	/** Backup file names. ".lpb.php" files are from 1.3.0/1.3.1: still listed and restorable. */
+	const NAME_RE = '/^pre-(pull|copy)-(\d{8})-(\d{6})-([a-f0-9]{16})\.lpb(\.gz|\.php)?$/';
 
 	/** @return string|WP_Error Backup file path. */
 	public static function create( $full = false, $keep = '' ) {
@@ -148,9 +143,6 @@ final class LivePull_Backup {
 	public static function chunk_step( array &$st, callable $out, $prune = true ) {
 		global $wpdb;
 		$gz = '.gz' === substr( $st['file'], -3 );
-		if ( ! $gz && ! file_exists( $st['file'] ) ) {
-			file_put_contents( $st['file'], self::GUARD ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-		}
 		$fh = $gz ? gzopen( $st['file'], 'ab6' ) : fopen( $st['file'], 'ab' ); // phpcs:ignore
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
@@ -290,7 +282,7 @@ final class LivePull_Backup {
 			if ( false === $line ) {
 				break;
 			}
-			if ( '' === trim( $line ) || 0 === strpos( $line, '<?php' ) ) {
+			if ( '' === trim( $line ) || 0 === strpos( $line, '<?php' ) ) { // First line of 1.3.0/1.3.1 backups.
 				continue;
 			}
 			$data = json_decode( $line, true );
