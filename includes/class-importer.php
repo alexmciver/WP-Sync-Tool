@@ -165,9 +165,9 @@ final class LivePull_Importer {
 		$items = self::sort_items( $items );
 
 		LivePull_Logger::suspend();
-		// Pulls never bring code across: every piece of pulled HTML (content, excerpts,
-		// descriptions, builder data, custom fields, options) goes through wp_kses_post(),
-		// whoever runs the pull. See self::html().
+		// Pulled HTML (content, excerpts, descriptions, builder data, custom fields, options)
+		// follows WordPress's own rule: kept as is only for users WordPress lets post
+		// unfiltered HTML, otherwise run through wp_kses_post(). See self::html().
 		remove_action( 'post_updated', 'wp_save_post_revision', 10 );
 		// Never let a pull trigger outgoing side effects from the local site.
 		remove_action( 'publish_post', '_publish_post_hook', 5 ); // pingbacks/enclosures
@@ -906,14 +906,23 @@ final class LivePull_Importer {
 	const CODE_RE = '/<\s*(script|iframe|object|embed|style|form|meta|link|base)\b|\son[a-z]+\s*=|javascript\s*:/i';
 
 	/**
-	 * Pulled HTML never carries code: it always goes through wp_kses_post(), whoever runs the
-	 * pull (administrators included), so scripts, frames, event handlers and javascript: links
-	 * are removed. JSON (page-builder data, form definitions) is filtered string by string so
-	 * its structure stays valid. Values are stored slash-free here, so no slashing is needed.
+	 * True when WordPress lets the person running the pull save unfiltered HTML (single-site
+	 * administrators, unless DISALLOW_UNFILTERED_HTML is set; super admins on multisite).
+	 * A pull is the same as that person saving the content themselves, so the same rule applies.
+	 */
+	public static function trusted() {
+		return current_user_can( 'unfiltered_html' );
+	}
+
+	/**
+	 * Pulled HTML follows WordPress's rule for the person running the pull: kept as is for users
+	 * allowed unfiltered HTML, otherwise run through wp_kses_post() so scripts, frames, event
+	 * handlers and javascript: links are removed. JSON (page-builder data, form definitions) is
+	 * filtered string by string so its structure stays valid. Values are stored slash-free here.
 	 */
 	public static function html( $html ) {
 		$html = (string) $html;
-		if ( '' === $html || ( false === strpos( $html, '<' ) && false === stripos( $html, 'u003c' ) && false === stripos( $html, 'javascript' ) && false === stripos( $html, ' on' ) ) ) {
+		if ( '' === $html || self::trusted() || ( false === strpos( $html, '<' ) && false === stripos( $html, 'u003c' ) && false === stripos( $html, 'javascript' ) && false === stripos( $html, ' on' ) ) ) {
 			return $html;
 		}
 		$t = ltrim( $html );
@@ -936,6 +945,9 @@ final class LivePull_Importer {
 
 	/** Every string inside a value (arrays and plain objects, any depth) through html(). */
 	public static function clean( $value ) {
+		if ( self::trusted() ) {
+			return $value;
+		}
 		if ( is_string( $value ) ) {
 			return self::html( $value );
 		}
@@ -957,7 +969,7 @@ final class LivePull_Importer {
 
 	/** A stored (possibly serialized) meta value with any code removed. */
 	public static function clean_raw( $raw ) {
-		if ( false === strpos( $raw, '<' ) && false === stripos( $raw, 'u003c' ) && false === stripos( $raw, 'javascript' ) && false === stripos( $raw, ' on' ) ) {
+		if ( self::trusted() || false === strpos( $raw, '<' ) && false === stripos( $raw, 'u003c' ) && false === stripos( $raw, 'javascript' ) && false === stripos( $raw, ' on' ) ) {
 			return $raw;
 		}
 		$value = LivePull_Payload::unserialize( $raw );
@@ -990,7 +1002,7 @@ final class LivePull_Importer {
 	/** Tell the person pulling when code was taken out of an item. */
 	private function note_stripped( array $item ) {
 		if ( self::$stripped ) {
-			$note = sprintf( '%s: scripts or other code in it were removed (LivePull only pulls safe HTML). Add them on this site if you need them.', self::label( $item ) );
+			$note = sprintf( '%s: scripts or other code in it were removed, because your account can\'t save unfiltered HTML on this site. Pull as an administrator to bring them across.', self::label( $item ) );
 			if ( ! in_array( $note, $this->report['skipped'], true ) ) {
 				$this->report['skipped'][] = $note;
 			}

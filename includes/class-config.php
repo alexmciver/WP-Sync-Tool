@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.3.2';
+	const VERSION  = '1.3.3';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */

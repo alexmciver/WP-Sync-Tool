@@ -131,8 +131,8 @@ class LivePull_CLI {
 		$flag  = function ( $k, $d = false ) use ( $assoc ) {
 			return \WP_CLI\Utils\get_flag_value( $assoc, $k, $d );
 		};
-		if ( ! current_user_can( 'manage_options' ) ) {
-			WP_CLI::warning( 'Running without an administrator. Add --user=<admin> so pulled items are saved with an administrator\'s permissions.' );
+		if ( ! current_user_can( 'unfiltered_html' ) ) {
+			WP_CLI::warning( 'Running without an administrator, so scripts and other code in pulled content are removed (WordPress\'s HTML filter). Add --user=<admin> to pull content as live has it.' );
 		}
 		$state = LivePull_Puller::start( array(
 			'dry_run'     => $flag( 'dry-run' ),

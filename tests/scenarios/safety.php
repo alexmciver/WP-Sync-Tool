@@ -62,8 +62,9 @@ if ( 'verify' === $phase ) {
 	wp_set_current_user( $admin_id );
 	( new LivePull_Importer( $client, $remote, array() ) )->run( array() );
 	t_ok( false === has_filter( 'content_save_pre', 'wp_filter_post_kses' ), 'an administrator\'s pull saves content as live has it (filter off, as WordPress decides)' );
-	$kept = LivePull_Importer::html( $evil );
-	t_ok( false === stripos( $kept, '<script' ) && false === stripos( $kept, 'javascript:' ) && false === stripos( $kept, 'onclick' ) && false !== strpos( $kept, '<p>Hi</p>' ), "an administrator's pull doesn't bring code across either" );
+	t_eq( LivePull_Importer::html( $evil ), $evil, "an administrator's pull keeps content as live has it (WordPress's unfiltered_html rule)" );
+	t_eq( LivePull_Importer::clean_raw( serialize( array( 'f' => $evil ) ) ), serialize( array( 'f' => $evil ) ), "an administrator's pull keeps custom fields as live has them" );
+	wp_set_current_user( $author_id ); // The rest of these checks: someone without unfiltered_html.
 	$safe = '<!-- wp:paragraph --><p class="x">Hello <a href="https://example.com">there</a> [et_pb_text]Hi[/et_pb_text]</p><!-- /wp:paragraph -->';
 	t_eq( LivePull_Importer::html( $safe ), $safe, 'ordinary block, shortcode and link markup is untouched' );
 	$builder = wp_json_encode( array( array( 'id' => 'a1', 'settings' => array( 'html' => '<div>ok</div><script>alert(1)</script>', 'title' => 'T' ), 'elements' => array( array( 'settings' => array( 'editor' => '<img src="x.jpg" onerror="alert(1)">' ) ) ) ) ) );

@@ -2,6 +2,10 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.3.3
+- **Scripts and embed codes come across again for administrators.** Pulled content follows WordPress's own `unfiltered_html` rule for the person pulling, exactly as if they had saved it themselves: administrators get content as live has it; anyone else gets everything (content, titles, terms, page-builder data, custom fields, settings) through `wp_kses_post()`, and the report names items that had code removed. Scheduled pulls run as the administrator who saved them; terminal pulls should use `--user=<admin>`.
+- Everything else from 1.3.2 stays: LivePull writes no PHP files.
+
 ## 1.3.2
 More changes from the WordPress.org review.
 - **Pulls never bring code across.** Every piece of pulled HTML (content, excerpts, titles, category and tag names and descriptions, page-builder data such as Elementor, Beaver Builder and Bricks, custom fields and settings) goes through `wp_kses_post()`, for administrators too. JSON builder data is filtered string by string, so layouts stay valid. Ordinary markup (blocks, shortcodes, links, images) is untouched; the pull report names any item that had scripts or other code removed.

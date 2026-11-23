@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -80,7 +80,7 @@ A page cache or firewall on live is answering instead of WordPress. Exclude `/wp
 
 = Are scripts and embed codes pulled? =
 
-No. LivePull only pulls content, never code. Everything that comes across (content, titles, custom fields, page-builder data and settings) goes through WordPress's own HTML filter, so scripts, event handlers and similar code are removed, whoever runs the pull. The pull report lists any item that had code removed, so you can add it on your local site if you need it.
+Only when the person running the pull is allowed to add them anyway. LivePull follows WordPress's own rule (the unfiltered_html permission): an administrator's pull brings content across exactly as live has it, just as if they had pasted it in themselves. For anyone else, everything that comes across (content, titles, custom fields, page-builder data and settings) goes through WordPress's HTML filter, so scripts and similar code are removed, and the pull report lists which items were affected. LivePull never asks you to enter code: it only copies content between two copies of your own site.
 
 = Is multisite supported? =
 
@@ -99,6 +99,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 5. The live site's screen: copy the connection code into your local site. That's all.
 
 == Changelog ==
+
+= 1.3.3 =
+* Pulled content follows WordPress's unfiltered_html rule for the person pulling: administrators get content as live has it, everyone else gets it through wp_kses_post() (now including page-builder data, custom fields and settings).
 
 = 1.3.2 =
 * Pulls never bring code across: all pulled HTML, including page-builder data, custom fields and settings, goes through wp_kses_post() whoever runs the pull. The report lists anything that had code removed.
@@ -157,6 +160,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.3.3 =
+Administrators' pulls bring scripts and embed codes across again; other users' pulls are filtered. Update both sites.
 
 = 1.3.2 =
 Scripts and other code are never pulled, for any user. New backups are compressed data files (older ones still restore). Update both sites.
