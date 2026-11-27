@@ -2,6 +2,13 @@
 
 All notable changes to LivePull. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.3.4
+Fixes from the WordPress.org review that apply whatever the listing.
+- **Credentials are never pulled or compared.** Settings whose names look like API keys (including WordPress's AI connector keys), secrets, tokens, passwords or licence keys are refused, even if `LIVEPULL_PULL_OPTIONS` or the `livepull_pulled_options` filter adds them. Compare now only reads settings LivePull actually pulls, matching the item asked for.
+- **No https-to-http downgrade.** If live's address is https and a request is redirected to plain http, LivePull stops with an explanation instead of sending the key (or basic-auth details) unencrypted.
+- **Backups can't be silently incomplete.** Every write is checked; on a full disk or write error the backup fails, the partial file is deleted, and nothing is changed.
+- Pruning never removes the backup that was just written, even when several backups share the same second.
+
 ## 1.3.3
 - **Scripts and embed codes come across again for administrators.** Pulled content follows WordPress's own `unfiltered_html` rule for the person pulling, exactly as if they had saved it themselves: administrators get content as live has it; anyone else gets everything (content, titles, terms, page-builder data, custom fields, settings) through `wp_kses_post()`, and the report names items that had code removed. Scheduled pulls run as the administrator who saved them; terminal pulls should use `--user=<admin>`.
 - Everything else from 1.3.2 stays: LivePull writes no PHP files.

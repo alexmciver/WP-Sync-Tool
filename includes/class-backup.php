@@ -100,7 +100,7 @@ final class LivePull_Backup {
 				return $done;
 			}
 		} while ( ! $done );
-		self::prune( $keep );
+		self::prune( array( $keep, $st['file'] ) );
 		return $st['file'];
 	}
 
@@ -147,55 +147,72 @@ final class LivePull_Backup {
 		if ( ! $fh ) {
 			return new WP_Error( 'livepull_backup', 'Could not write backup file in ' . dirname( $st['file'] ) );
 		}
+		// Every write is checked: a full disk or write error stops the backup with an error, so
+		// a pull never goes ahead on an incomplete backup.
 		$write = function ( $data ) use ( $fh, $gz ) {
-			$line = wp_json_encode( $data ) . "\n";
-			$gz ? gzwrite( $fh, $line ) : fwrite( $fh, $line ); // phpcs:ignore
+			$json = wp_json_encode( $data );
+			if ( false === $json ) {
+				throw new RuntimeException( 'Part of the database could not be encoded for the backup.' );
+			}
+			$line    = $json . "\n";
+			$written = $gz ? gzwrite( $fh, $line ) : fwrite( $fh, $line ); // phpcs:ignore
+			if ( strlen( $line ) !== (int) $written ) {
+				throw new RuntimeException( 'Writing the backup file failed (is the disk full?).' );
+			}
 		};
-		if ( ! $st['begun'] ) {
-			$write( array( 'format' => self::FORMAT, 'time' => time(), 'full' => $st['full'], 'prefix' => $wpdb->prefix ) );
-			$st['begun'] = true;
-		}
 		$done  = false;
 		$error = null;
-		while ( ! $out() ) {
-			if ( $st['ti'] >= count( $st['tables'] ) ) {
-				$done = true;
-				break;
+		try {
+			if ( ! $st['begun'] ) {
+				$write( array( 'format' => self::FORMAT, 'time' => time(), 'full' => $st['full'], 'prefix' => $wpdb->prefix ) );
+				$st['begun'] = true;
 			}
-			$table = $st['tables'][ $st['ti'] ];
-			if ( 0 === $st['offset'] ) {
-				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
-					$st['ti']++;
-					continue;
-				}
-				$desc = LivePull_Schema::describe( $table );
-				if ( is_wp_error( $desc ) ) {
-					$error = $desc;
+			while ( ! $out() ) {
+				if ( $st['ti'] >= count( $st['tables'] ) ) {
+					$done = true;
 					break;
 				}
-				$write( array( 'table' => $table, 'schema' => $desc ) );
-			}
-			$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 500', $table, $st['offset'] ), ARRAY_N );
-			if ( $rows ) {
-				foreach ( $rows as &$row ) {
-					$row = array_map( array( 'LivePull_Schema', 'pack' ), $row );
+				$table = $st['tables'][ $st['ti'] ];
+				if ( 0 === $st['offset'] ) {
+					if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
+						$st['ti']++;
+						continue;
+					}
+					$desc = LivePull_Schema::describe( $table );
+					if ( is_wp_error( $desc ) ) {
+						$error = $desc;
+						break;
+					}
+					$write( array( 'table' => $table, 'schema' => $desc ) );
 				}
-				unset( $row );
-				$write( array( 'rows' => $rows ) );
+				$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i LIMIT %d, 500', $table, $st['offset'] ), ARRAY_N );
+				if ( $rows ) {
+					foreach ( $rows as &$row ) {
+						$row = array_map( array( 'LivePull_Schema', 'pack' ), $row );
+					}
+					unset( $row );
+					$write( array( 'rows' => $rows ) );
+				}
+				if ( count( (array) $rows ) < 500 ) {
+					$st['ti']++;
+					$st['offset'] = 0;
+				} else {
+					$st['offset'] += 500;
+				}
 			}
-			if ( count( (array) $rows ) < 500 ) {
-				$st['ti']++;
-				$st['offset'] = 0;
-			} else {
-				$st['offset'] += 500;
-			}
+		} catch ( RuntimeException $e ) {
+			$error = new WP_Error( 'livepull_backup_write', $e->getMessage() . ' Nothing was changed.' );
 		}
-		$gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
+		$closed = $gz ? gzclose( $fh ) : fclose( $fh ); // phpcs:ignore
+		if ( ! $error && ! $closed ) {
+			$error = new WP_Error( 'livepull_backup_write', 'Writing the backup file failed (is the disk full?). Nothing was changed.' );
+		}
 		if ( $error ) {
+			wp_delete_file( $st['file'] ); // Never leave an incomplete backup that looks restorable.
 			return $error;
 		}
 		if ( $done && $prune ) {
-			self::prune();
+			self::prune( $st['file'] );
 		}
 		return $done;
 	}
@@ -205,13 +222,20 @@ final class LivePull_Backup {
 	 * full copies. Frequent (e.g. hourly scheduled) pulls then never push out the backup
 	 * taken before the last Copy everything.
 	 */
-	private static function prune( $keep = '' ) {
+	/**
+	 * Keep the newest backups of each kind. $keep: files that always stay (the backup being
+	 * restored, the one just written), even when several share the same second.
+	 */
+	private static function prune( $keep = array() ) {
+		$keep = array_map( 'wp_normalize_path', array_filter( (array) $keep ) );
 		foreach ( array( 'pull' => self::KEEP, 'copy' => self::KEEP_COPY ) as $kind => $max ) {
 			$all = array_values( array_filter( self::all(), function ( $b ) use ( $keep, $kind ) {
-				return $kind === $b['kind'] && ( ! $keep || wp_normalize_path( $b['file'] ) !== wp_normalize_path( $keep ) );
+				return $kind === $b['kind'] && ! in_array( wp_normalize_path( $b['file'] ), $keep, true );
 			} ) );
-			$protected = $keep && 0 === strpos( basename( $keep ), 'pre-' . $kind . '-' );
-			foreach ( array_slice( $all, $protected ? $max - 1 : $max ) as $b ) {
+			$protected = count( array_filter( $keep, function ( $k ) use ( $kind ) {
+				return 0 === strpos( basename( $k ), 'pre-' . $kind . '-' );
+			} ) );
+			foreach ( array_slice( $all, max( 0, $max - $protected ) ) as $b ) {
 				wp_delete_file( $b['file'] );
 			}
 		}

@@ -4,7 +4,7 @@ Tags: sync, local development, staging, migration, content
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.3
+Stable tag: 1.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -100,6 +100,12 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 
 == Changelog ==
 
+= 1.3.4 =
+* Settings that look like credentials (API keys, secrets, tokens, passwords) are never pulled or compared, whatever the configuration says.
+* If an https live site redirects to plain http, LivePull stops instead of sending its key unencrypted.
+* Every backup write is checked: a full disk stops the pull with an error and leaves no partial backup.
+* The backup just made is never pruned, even when several are made in the same second.
+
 = 1.3.3 =
 * Pulled content follows WordPress's unfiltered_html rule for the person pulling: administrators get content as live has it, everyone else gets it through wp_kses_post() (now including page-builder data, custom fields and settings).
 
@@ -160,6 +166,9 @@ Go to Tools → LivePull → Settings and click **Report a problem**. It gathers
 * First release.
 
 == Upgrade Notice ==
+
+= 1.3.4 =
+Security and reliability fixes. Update both sites.
 
 = 1.3.3 =
 Administrators' pulls bring scripts and embed codes across again; other users' pulls are filtered. Update both sites.

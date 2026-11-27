@@ -755,7 +755,12 @@ final class LivePull_Puller {
 			$add( __( 'Approved', 'livepull' ), $o['comment_approved'], $c ? $c->comment_approved : '' );
 			$add( __( 'Comment', 'livepull' ), $loc( $o['comment_content'] ), $c ? $c->comment_content : '' );
 		} else {
-			$name = $obj['option']['name'];
+			$name = isset( $obj['option']['name'] ) ? (string) $obj['option']['name'] : '';
+			// Only settings LivePull pulls, matching the item asked for: never any other option
+			// (and never credentials, see LivePull_Config::option_forbidden()).
+			if ( '' === $name || ! LivePull_Config::option_allowed( $name ) || LivePull_Config::option_sid( $name ) !== $sid ) {
+				return new WP_Error( 'livepull_bad_key', 'Unknown item.' );
+			}
 			$live = $loc( LivePull_Payload::unserialize( $obj['option']['value'] ) );
 			$add( $name, is_scalar( $live ) ? $live : wp_json_encode( $live, JSON_PRETTY_PRINT ), is_scalar( get_option( $name ) ) ? get_option( $name ) : wp_json_encode( get_option( $name ), JSON_PRETTY_PRINT ) );
 		}

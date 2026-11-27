@@ -89,6 +89,49 @@ if ( 'verify' === $phase ) {
 	t_eq( count( $fails ), 0, 'connection check finds nothing wrong' );
 	t_ok( false === strpos( LivePull_Config::scrub( 'x https://cdn.example/a.jpg?X-Amz-Signature=s3cr3t y key ending …ab12' ), 's3cr3t' ), 'signed links lose their secrets in stored messages' );
 
+	// Credentials are never pulled or compared, even if a filter or LIVEPULL_PULL_OPTIONS adds them.
+	add_filter( 'livepull_pulled_options', $add_keys = function ( $o ) { $o['connectors_ai_openai_api_key'] = true; $o['my_plugin_secret'] = true; $o['footer_text'] = true; return $o; } );
+	t_ok( ! LivePull_Config::option_allowed( 'connectors_ai_openai_api_key' ) && ! LivePull_Config::option_allowed( 'my_plugin_secret' ) && LivePull_Config::option_allowed( 'footer_text' ), 'API keys and secrets are never pulled, whatever the settings say' );
+	update_option( 'connectors_ai_openai_api_key', 'sk-local-secret' );
+	add_filter( 'pre_http_request', $forge = function ( $pre, $args, $url ) {
+		if ( false !== strpos( $url, 'livepull/v1/object' ) ) {
+			return array( 'headers' => array( 'content-type' => 'application/json' ), 'body' => wp_json_encode( array( 'option' => array( 'name' => 'connectors_ai_openai_api_key', 'value' => 's:1:"x";' ) ) ), 'response' => array( 'code' => 200, 'message' => 'OK' ), 'cookies' => array(), 'filename' => null );
+		}
+		return $pre;
+	}, 10, 3 );
+	$cmp = LivePull_Puller::compare( 'option:' . LivePull_Config::option_sid( 'connectors_ai_openai_api_key' ) );
+	remove_filter( 'pre_http_request', $forge, 10 );
+	t_ok( is_wp_error( $cmp ) && false === strpos( wp_json_encode( $cmp ), 'sk-local-secret' ), 'compare refuses settings LivePull doesn\'t pull, so a local API key is never read' );
+	delete_option( 'connectors_ai_openai_api_key' );
+	remove_filter( 'livepull_pulled_options', $add_keys );
+
+	// The key never travels over plain http when live is https.
+	$cl = new LivePull_Client( 'https://live.example', 'k' );
+	$ss = new ReflectionMethod( 'LivePull_Client', 'same_site' );
+	$ss->setAccessible( true );
+	t_ok( $ss->invoke( $cl, 'https://www.live.example/wp-json/' ) && ! $ss->invoke( $cl, 'http://live.example/wp-json/' ), 'an https live site may not redirect LivePull to plain http' );
+	t_ok( $ss->invoke( new LivePull_Client( 'http://live.example', 'k' ), 'https://live.example/x' ), 'an http live site may move up to https' );
+
+	// A backup that can't be written completely is an error, and no partial file is left.
+	if ( ! in_array( 'lpfull', stream_get_wrappers(), true ) ) {
+		stream_wrapper_register( 'lpfull', get_class( new class() {
+			public $context;
+			public static $bytes = 0;
+			public function stream_open( $p, $m, $o, &$op ) { return true; }
+			public function stream_write( $d ) { if ( self::$bytes > 2000 ) { return 0; } self::$bytes += strlen( $d ); return strlen( $d ); }
+			public function stream_close() {}
+			public function stream_flush() { return true; }
+			public function stream_stat() { return array(); }
+			public function url_stat( $p, $f ) { return false; }
+			public function unlink( $p ) { $GLOBALS['lp_unlinked'] = $p; return true; }
+		} ) );
+	}
+	$st         = LivePull_Backup::chunk_start( false );
+	$st['file'] = 'lpfull://backup.lpb';
+	$GLOBALS['lp_unlinked'] = '';
+	$r = LivePull_Backup::chunk_step( $st, '__return_false', false );
+	t_ok( is_wp_error( $r ) && 'livepull_backup_write' === $r->get_error_code(), 'a backup that runs out of disk space fails instead of reporting success' );
+
 	if ( isset( $s['form'] ) ) {
 		$form = t_local( $s['form'] );
 		$page = get_post( t_local( $s['page'] ) );

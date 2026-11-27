@@ -19,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class LivePull_Config {
 
-	const VERSION  = '1.3.3';
+	const VERSION  = '1.3.4';
 	const META_KEY = '_livepull_id';
 
 	/** Constants in wp-config.php win; otherwise the values saved on Tools → LivePull. */
@@ -349,7 +349,16 @@ final class LivePull_Config {
 			'uninstall_plugins', 'auto_update_plugins', 'auto_update_themes', 'secret_key', 'nonce_key', 'nonce_salt', 'auth_key', 'auth_salt',
 			'logged_in_key', 'logged_in_salt', 'secure_auth_key', 'secure_auth_salt', 'db_version', 'initial_db_version',
 			strtolower( $wpdb->prefix . 'user_roles' ) );
-		return in_array( $name, $deny, true ) || 0 === strpos( $name, 'livepull_' ) || 0 === strpos( $name, '_transient' ) || 0 === strpos( $name, '_site_transient' );
+		return in_array( $name, $deny, true ) || 0 === strpos( $name, 'livepull_' ) || 0 === strpos( $name, '_transient' ) || 0 === strpos( $name, '_site_transient' )
+			|| self::option_secret( $name );
+	}
+
+	/**
+	 * Settings that look like credentials (API keys, including WordPress's AI connector keys,
+	 * secrets, tokens, passwords, licence keys): never pulled, compared or shown.
+	 */
+	public static function option_secret( $name ) {
+		return (bool) preg_match( '/api[_-]?key|apikey|secret|token|passw|pwd|licen[cs]e[_-]?key|credential|connector|private[_-]?key|auth[_-]?key/i', (string) $name );
 	}
 
 	/** May a pull write this setting? Only the configured pulled settings, never forbidden ones. */

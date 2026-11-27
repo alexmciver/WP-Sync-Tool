@@ -148,6 +148,9 @@ final class LivePull_Client {
 		$api_headers         = isset( $args['headers'] ) ? $args['headers'] : array();
 		for ( $hop = 0; $hop <= 5; $hop++ ) {
 			if ( 'api' === $purpose ) {
+				if ( 'https' === strtolower( (string) wp_parse_url( $this->base, PHP_URL_SCHEME ) ) && 'https' !== strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) ) {
+					return new WP_Error( 'livepull_redirect', 'The live site redirected from https to plain http. LivePull won\'t send its key over an unencrypted connection, so it stopped. Check the live site\'s https setup.' );
+				}
 				if ( ! $this->same_site( $url ) ) {
 					return new WP_Error( 'livepull_redirect', sprintf( 'The live site redirected to a different address (%s). LivePull only sends its key to the live site, so it stopped. Check the live site\'s address in the connection settings.', (string) wp_parse_url( $url, PHP_URL_HOST ) ) );
 				}
@@ -188,9 +191,16 @@ final class LivePull_Client {
 		return new WP_Error( 'livepull_redirect', 'Too many redirects from ' . wp_parse_url( $url, PHP_URL_HOST ) . '.' );
 	}
 
-	/** Same site as live: same host, ignoring a leading "www.", over http or https. */
+	/**
+	 * Same site as live: same host, ignoring a leading "www.". http may move up to https but
+	 * never down: if live's address is https, a redirect to http is refused, so the key and any
+	 * basic-auth details are never sent unencrypted.
+	 */
 	private function same_site( $url ) {
 		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+		if ( 'https' === strtolower( (string) wp_parse_url( $this->base, PHP_URL_SCHEME ) ) && 'https' !== $scheme ) {
+			return false;
+		}
 		$strip  = function ( $h ) {
 			$h = strtolower( (string) $h );
 			return 0 === strpos( $h, 'www.' ) ? substr( $h, 4 ) : $h;
@@ -207,8 +217,10 @@ final class LivePull_Client {
 
 	private function download_headers( $url ) {
 		// Only send basic auth to the live host itself, never to a CDN.
+		// Never over plain http when live's address is https.
 		if ( defined( 'LIVEPULL_REMOTE_BASIC_AUTH' ) && LIVEPULL_REMOTE_BASIC_AUTH
-			&& wp_parse_url( $url, PHP_URL_HOST ) === wp_parse_url( $this->base, PHP_URL_HOST ) ) {
+			&& wp_parse_url( $url, PHP_URL_HOST ) === wp_parse_url( $this->base, PHP_URL_HOST )
+			&& ( 'https' === strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) ) || 'https' !== strtolower( (string) wp_parse_url( $this->base, PHP_URL_SCHEME ) ) ) ) {
 			return array( 'Authorization' => 'Basic ' . base64_encode( LIVEPULL_REMOTE_BASIC_AUTH ) ); // phpcs:ignore
 		}
 		return array();
